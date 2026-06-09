@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}IPAM — {{ subnet.name }}{% endblock %}
+{% block content %}
+
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>📋 {{ subnet.name }}</h1>
+        <p>{{ subnet.cidr }} · {{ space|length }} addresses</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <a href="{{ url_for('ipam.export_csv', subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+        <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
+    </div>
+</div>
+
+<!-- Summary bar -->
+<div class="card">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.available }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Available</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ counts.dynamic }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Dynamic</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.reserved }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Reserved</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Static / Noted</div>
+        </div>
+        <div style="flex:1;min-width:200px;">
+            <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
+                <div style="width:{{ (counts.dynamic / space|length * 100)|round }}%;background:var(--primary);"></div>
+                <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
+                <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                {{ ((counts.dynamic + counts.reserved + counts.static) / space|length * 100)|round }}% utilised
+            </div>
+        </div>
+    </div>
+    <!-- Filter tabs -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="?filter=all"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}">All ({{ space|length }})</a>
+        <a href="?filter=available" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}">Available ({{ counts.available }})</a>
+        <a href="?filter=dynamic"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}">Dynamic ({{ counts.dynamic }})</a>
+        <a href="?filter=reserved"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}">Reserved ({{ counts.reserved }})</a>
+        <a href="?filter=static"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}">Static ({{ counts.static }})</a>
+    </div>
+</div>
+
+<!-- Address table -->
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table>
+    <thead><tr>
+        <th>IP Address</th>
+        <th>Status</th>
+        <th>Label / Hostname</th>
+        <th>Owner / MAC</th>
+        <th>Notes</th>
+        <th style="width:60px;"></th>
+    </tr></thead>
+    <tbody>
+    {% for entry in space %}
+    {% if status_filter == 'all' or entry.status == status_filter %}
+    <tr>
+        <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
+        <td>
+            {% if entry.status == 'available' %}
+            <span style="font-size:12px;color:var(--text-muted);">○ Available</span>
+            {% elif entry.status == 'dynamic' %}
+            <span style="font-size:12px;color:var(--primary);">● Dynamic</span>
+            {% elif entry.status == 'reserved' %}
+            <span style="font-size:12px;color:var(--success);">● Reserved</span>
+            {% elif entry.status == 'static' %}
+            <span style="font-size:12px;color:var(--warning);">● Static</span>
+            {% endif %}
+        </td>
+        <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or entry.mac or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {{ entry.notes or '—' }}
+        </td>
+        <td>
+            <button class="btn btn-sm btn-secondary" onclick="openEditModal(
+                '{{ entry.ip }}',
+                '{{ entry.status }}',
+                '{{ entry.label | replace("'", "\\'") | replace('"', '&quot;') }}',
+                '{{ entry.owner | replace("'", "\\'") | replace('"', '&quot;') }}',
+                '{{ entry.notes | replace("'", "\\'") | replace('"', '&quot;') | replace("\n", "\\n") }}',
+                '{{ entry.hostname or "" }}',
+                '{{ entry.mac or "" }}'
+            )">✏️</button>
+        </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+
+<!-- Edit Modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            width:min(500px,94vw);max-height:90vh;overflow-y:auto;
+            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <div>
+            <h3 style="margin:0;">✏️ Edit <span id="edit-ip" style="color:var(--primary);font-family:monospace;"></span></h3>
+            <div id="edit-status-label" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
+        </div>
+        <button onclick="closeEditModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <!-- Read-only info for dynamic/reserved -->
+    <div id="edit-kea-info" style="display:none;background:var(--surface2);border-radius:var(--radius);
+         padding:12px 14px;margin-bottom:16px;font-size:12px;">
+        <div style="font-weight:600;margin-bottom:6px;color:var(--text-muted);text-transform:uppercase;
+                    letter-spacing:.04em;font-size:10px;">Kea Info (read-only)</div>
+        <div id="edit-kea-hostname" style="margin-bottom:3px;"></div>
+        <div id="edit-kea-mac"></div>
+    </div>
+
+    <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', subnet_id=subnet_id) }}">
+        <input type="hidden" name="ip" id="edit-ip-input">
+
+        <!-- Status selector — only for available/static -->
+        <div id="edit-status-group" class="form-group">
+            <label>Status</label>
+            <select name="ipam_status" id="edit-ipam-status" style="width:100%;">
+                <option value="available">○ Available — no annotation</option>
+                <option value="static">● Static — manually designated address</option>
+            </select>
+            <div class="form-hint">
+                Setting an IP as <strong>Static</strong> marks it as intentionally assigned
+                outside of Kea's dynamic pool (e.g. a router, NAS, or printer with a manually
+                configured IP). It does not affect Kea's DHCP pool configuration.
+            </div>
+        </div>
+
+        <!-- Label — editable for available/static, hidden for dynamic/reserved -->
+        <div id="edit-label-group" class="form-group">
+            <label>Label <span style="font-size:11px;color:var(--text-muted);">(e.g. "Router", "NAS", "Printer")</span></label>
+            <input type="text" name="label" id="edit-label" maxlength="100" style="width:100%;" autocomplete="off">
+        </div>
+
+        <!-- Owner — editable for available/static, hidden for dynamic/reserved -->
+        <div id="edit-owner-group" class="form-group">
+            <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "Lab gear")</span></label>
+            <input type="text" name="owner" id="edit-owner" maxlength="100" style="width:100%;" autocomplete="off">
+        </div>
+
+        <!-- Notes — always editable -->
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea name="notes" id="edit-notes" rows="3"
+                      style="width:100%;resize:vertical;" placeholder="Any additional notes…"></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button type="button" id="edit-clear-btn" class="btn btn-secondary"
+                    style="margin-left:auto;color:var(--danger);"
+                    onclick="clearEntry()">Clear all notes</button>
+        </div>
+    </form>
+</div>
+</div>
+
+<!-- Hidden delete form -->
+<form id="clear-form" method="POST"
+      action="{{ url_for('ipam.delete_entry', subnet_id=subnet_id) }}"
+      style="display:none;">
+    <input type="hidden" name="ip" id="clear-ip-input">
+</form>
+
+<script>
+var _editStatus = '';
+
+function openEditModal(ip, status, label, owner, notes, hostname, mac) {
+    _editStatus = status;
+
+    document.getElementById('edit-ip').textContent = ip;
+    document.getElementById('edit-ip-input').value = ip;
+    document.getElementById('clear-ip-input').value = ip;
+
+    // Status label
+    var statusLabels = {
+        available: '○ Available',
+        dynamic:   '● Dynamic lease',
+        reserved:  '● Kea reservation',
+        static:    '● Static'
+    };
+    document.getElementById('edit-status-label').textContent = statusLabels[status] || status;
+
+    // Set current values
+    document.getElementById('edit-label').value = label;
+    document.getElementById('edit-owner').value = owner;
+    document.getElementById('edit-notes').value = notes.replace(/\\n/g, '\n');
+    document.getElementById('edit-ipam-status').value = (status === 'static') ? 'static' : 'available';
+
+    // Show/hide fields based on status
+    var isDynRes = (status === 'dynamic' || status === 'reserved');
+
+    // Kea info section
+    var keaInfo = document.getElementById('edit-kea-info');
+    keaInfo.style.display = isDynRes && (hostname || mac) ? '' : 'none';
+    document.getElementById('edit-kea-hostname').textContent = hostname ? '🖥 ' + hostname : '';
+    document.getElementById('edit-kea-mac').textContent = mac ? '🔌 ' + mac : '';
+
+    // Status selector — only for available/static
+    document.getElementById('edit-status-group').style.display = isDynRes ? 'none' : '';
+
+    // Label and owner — hide for dynamic/reserved (Kea controls identity)
+    document.getElementById('edit-label-group').style.display = isDynRes ? 'none' : '';
+    document.getElementById('edit-owner-group').style.display = isDynRes ? 'none' : '';
+
+    // Clear button — only if there's something to clear
+    document.getElementById('edit-clear-btn').style.display =
+        (label || owner || notes) ? '' : 'none';
+
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('edit-modal').style.display = 'none';
+}
+
+function clearEntry() {
+    jenConfirm('Clear all notes and labels for this IP?', function() {
+        document.getElementById('clear-form').submit();
+    });
+}
+
+document.getElementById('edit-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeEditModal();
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeEditModal();
+});
+</script>
+
+{% endblock %}

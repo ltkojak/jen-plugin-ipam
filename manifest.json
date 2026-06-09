@@ -1,0 +1,26 @@
+{
+  "id": "ipam",
+  "name": "IPAM Lite",
+  "version": "1.1.0",
+  "description": "Full IP address space management. See every IP in each subnet \u2014 available, dynamic, reserved, or statically noted. Add labels, owners, and notes to any address. Export to CSV. Replaces Netbox for simple static IP tracking.",
+  "author": "Matthew Thibodeau",
+  "requires_jen": "3.6.0",
+  "tags": [
+    "ipam",
+    "addresses",
+    "inventory"
+  ],
+  "changelog_url": "https://github.com/ltkojak/jen-kea/blob/main/plugins/ipam/CHANGELOG.md",
+  "nav": [
+    {
+      "section": "network",
+      "label": "IPAM",
+      "icon": "\ud83d\udccb",
+      "endpoint": "ipam.index"
+    }
+  ],
+  "db_migrations": [
+    "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL UNIQUE, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))"
+  ]
+}

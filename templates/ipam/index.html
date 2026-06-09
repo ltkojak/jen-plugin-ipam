@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}IPAM Lite{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>📋 IPAM Lite</h1>
+    <p>IP address space across all subnets.</p>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+{% for subnet_id, info in subnet_map.items() %}
+{% set s = summaries.get(subnet_id, {}) %}
+<a href="{{ url_for('ipam.subnet_detail', subnet_id=subnet_id) }}"
+   style="text-decoration:none;color:inherit;">
+<div class="card" style="cursor:pointer;transition:border-color .15s;"
+     onmouseover="this.style.borderColor='var(--primary)'"
+     onmouseout="this.style.borderColor='var(--border)'">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+        <div>
+            <div style="font-weight:600;font-size:14px;">{{ info.name }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">{{ info.cidr }}</div>
+        </div>
+        <span style="font-size:20px;font-weight:700;color:var(--primary);">{{ s.pct or 0 }}%</span>
+    </div>
+
+    {% if s.total %}
+    <!-- Stacked utilisation bar -->
+    <div style="height:8px;border-radius:4px;background:var(--surface2);display:flex;overflow:hidden;margin-bottom:10px;">
+        {% if s.dynamic %}
+        <div style="width:{{ (s.dynamic / s.total * 100)|round }}%;background:var(--primary);"></div>
+        {% endif %}
+        {% if s.reserved %}
+        <div style="width:{{ (s.reserved / s.total * 100)|round }}%;background:var(--success);"></div>
+        {% endif %}
+        {% if s.static %}
+        <div style="width:{{ (s.static / s.total * 100)|round }}%;background:var(--warning);"></div>
+        {% endif %}
+    </div>
+
+    <div style="display:flex;gap:16px;font-size:11px;flex-wrap:wrap;">
+        <span style="color:var(--text-muted);">
+            <span style="color:var(--success);">●</span> {{ s.available }} available
+        </span>
+        <span style="color:var(--text-muted);">
+            <span style="color:var(--primary);">●</span> {{ s.dynamic }} dynamic
+        </span>
+        <span style="color:var(--text-muted);">
+            <span style="color:var(--success);">●</span> {{ s.reserved }} reserved
+        </span>
+        <span style="color:var(--text-muted);">
+            <span style="color:var(--warning);">●</span> {{ s.static }} static
+        </span>
+    </div>
+    {% else %}
+    <div style="font-size:12px;color:var(--text-muted);">No data</div>
+    {% endif %}
+</div>
+</a>
+{% endfor %}
+</div>
+
+<div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);margin-top:4px;">
+    <strong style="color:var(--text);">Status legend:</strong>
+    &nbsp;<span style="color:var(--primary);">● Dynamic</span> — active DHCP lease
+    &nbsp;·&nbsp;<span style="color:var(--success);">● Reserved</span> — Kea reservation
+    &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually noted in IPAM
+    &nbsp;·&nbsp;Available — no lease, reservation, or note
+</div>
+
+{% endblock %}
