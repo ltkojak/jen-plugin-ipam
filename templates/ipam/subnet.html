@@ -44,26 +44,21 @@
         </div>
     </div>
 
-    <!-- Search + filter row -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <div style="position:relative;flex:1;min-width:200px;max-width:340px;">
-            <input type="text" id="ipam-search" placeholder="Search IP, hostname, label, MAC, owner…"
-                   style="width:100%;box-sizing:border-box;padding:6px 28px 6px 30px;"
-                   oninput="filterTable()" autocomplete="off">
-            <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);
-                         color:var(--text-muted);pointer-events:none;font-size:13px;">🔍</span>
-            <button id="search-clear" onclick="clearSearch()"
-                    style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);
-                           background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;
-                           line-height:1;">✕</button>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
-            <button onclick="setFilter('all')"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
-            <button onclick="setFilter('available')" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
-            <button onclick="setFilter('dynamic')"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
-            <button onclick="setFilter('reserved')"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
-            <button onclick="setFilter('static')"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
-        </div>
+    <!-- Search box -->
+    <div style="margin-bottom:10px;">
+        <input type="text" id="ipam-search"
+               placeholder="🔍  Search IP, hostname, label, MAC, owner…"
+               style="width:100%;box-sizing:border-box;"
+               oninput="filterTable()" autocomplete="off">
+    </div>
+
+    <!-- Filter tabs -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
+        <button onclick="setFilter('all')"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
+        <button onclick="setFilter('available')" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
+        <button onclick="setFilter('dynamic')"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+        <button onclick="setFilter('reserved')"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+        <button onclick="setFilter('static')"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -229,7 +224,6 @@ var _currentSearch = '';
 function filterTable() {
     var q = document.getElementById('ipam-search').value.toLowerCase().trim();
     _currentSearch = q;
-    document.getElementById('search-clear').style.display = q ? '' : 'none';
 
     var rows = document.querySelectorAll('#ipam-table tbody tr');
     var visible = 0;
