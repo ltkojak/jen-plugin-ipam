@@ -48,7 +48,8 @@
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
         <div style="position:relative;flex:1;min-width:200px;max-width:340px;">
             <input type="text" id="ipam-search" placeholder="Search IP, hostname, label, MAC, owner…"
-                   style="width:100%;padding-left:30px;" oninput="filterTable()" autocomplete="off">
+                   style="width:100%;box-sizing:border-box;padding:6px 28px 6px 30px;"
+                   oninput="filterTable()" autocomplete="off">
             <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);
                          color:var(--text-muted);pointer-events:none;font-size:13px;">🔍</span>
             <button id="search-clear" onclick="clearSearch()"

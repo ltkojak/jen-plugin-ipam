@@ -1,7 +1,7 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Full IP address space management. See every IP in each subnet \u2014 available, dynamic, reserved, or statically noted. Add labels, owners, and notes to any address. Export to CSV. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
   "requires_jen": "3.6.0",
