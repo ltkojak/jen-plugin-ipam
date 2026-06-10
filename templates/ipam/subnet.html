@@ -13,9 +13,9 @@
     </div>
 </div>
 
-<!-- Summary bar -->
+<!-- Summary + filters -->
 <div class="card">
-    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
         <div style="text-align:center;">
             <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.available }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Available</div>
@@ -30,7 +30,7 @@
         </div>
         <div style="text-align:center;">
             <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Static / Noted</div>
+            <div style="font-size:11px;color:var(--text-muted);">Static</div>
         </div>
         <div style="flex:1;min-width:200px;">
             <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
@@ -43,32 +43,47 @@
             </div>
         </div>
     </div>
-    <!-- Filter tabs -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a href="?filter=all"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}">All ({{ space|length }})</a>
-        <a href="?filter=available" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}">Available ({{ counts.available }})</a>
-        <a href="?filter=dynamic"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}">Dynamic ({{ counts.dynamic }})</a>
-        <a href="?filter=reserved"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}">Reserved ({{ counts.reserved }})</a>
-        <a href="?filter=static"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}">Static ({{ counts.static }})</a>
+
+    <!-- Search + filter row -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <div style="position:relative;flex:1;min-width:200px;max-width:340px;">
+            <input type="text" id="ipam-search" placeholder="Search IP, hostname, label, MAC, owner…"
+                   style="width:100%;padding-left:30px;" oninput="filterTable()" autocomplete="off">
+            <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);
+                         color:var(--text-muted);pointer-events:none;font-size:13px;">🔍</span>
+            <button id="search-clear" onclick="clearSearch()"
+                    style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);
+                           background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;
+                           line-height:1;">✕</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
+            <button onclick="setFilter('all')"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
+            <button onclick="setFilter('available')" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
+            <button onclick="setFilter('dynamic')"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+            <button onclick="setFilter('reserved')"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+            <button onclick="setFilter('static')"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
+        </div>
     </div>
+    <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
 
 <!-- Address table -->
 <div class="card" style="padding:0;">
 <div class="table-wrap">
-<table>
+<table id="ipam-table">
     <thead><tr>
         <th>IP Address</th>
         <th>Status</th>
-        <th>Label / Hostname</th>
-        <th>Owner / MAC</th>
+        <th>Hostname / Label</th>
+        <th>MAC Address</th>
+        <th>Owner</th>
         <th>Notes</th>
-        <th style="width:60px;"></th>
+        <th style="width:80px;"></th>
     </tr></thead>
     <tbody>
     {% for entry in space %}
-    {% if status_filter == 'all' or entry.status == status_filter %}
-    <tr>
+    <tr data-status="{{ entry.status }}"
+        data-search="{{ entry.ip }} {{ entry.hostname }} {{ entry.label }} {{ entry.mac }} {{ entry.owner }} {{ entry.notes }}">
         <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
         <td>
             {% if entry.status == 'available' %}
@@ -82,26 +97,53 @@
             {% endif %}
         </td>
         <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or entry.mac or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);max-width:180px;
+                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             {{ entry.notes or '—' }}
         </td>
-        <td>
-            <button class="btn btn-sm btn-secondary" onclick="openEditModal(
-                '{{ entry.ip }}',
-                '{{ entry.status }}',
-                '{{ entry.label | replace("'", "\\'") | replace('"', '&quot;') }}',
-                '{{ entry.owner | replace("'", "\\'") | replace('"', '&quot;') }}',
-                '{{ entry.notes | replace("'", "\\'") | replace('"', '&quot;') | replace("\n", "\\n") }}',
-                '{{ entry.hostname or "" }}',
-                '{{ entry.mac or "" }}'
-            )">✏️</button>
+        <td style="white-space:nowrap;">
+            <!-- Action buttons -->
+            <div style="display:flex;gap:4px;align-items:center;">
+                <button class="btn btn-sm btn-secondary" title="Edit" onclick="openEditModal(
+                    '{{ entry.ip }}',
+                    '{{ entry.status }}',
+                    '{{ entry.label | replace("'", "\\'") | replace('"', '&quot;') }}',
+                    '{{ entry.owner | replace("'", "\\'") | replace('"', '&quot;') }}',
+                    '{{ entry.notes | replace("'", "\\'") | replace('"', '&quot;') | replace("\n", "\\n") }}',
+                    '{{ entry.hostname or "" }}',
+                    '{{ entry.mac or "" }}'
+                )">✏️</button>
+
+                {% if entry.status == 'available' or entry.status == 'static' %}
+                <!-- Create Reservation for available/static IPs -->
+                <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}"
+                   class="btn btn-sm btn-secondary" title="Create Reservation" style="padding:3px 7px;">
+                    📌
+                </a>
+                {% elif entry.status == 'dynamic' %}
+                <!-- View lease for dynamic IPs -->
+                <a href="/leases?search={{ entry.ip }}"
+                   class="btn btn-sm btn-secondary" title="View Lease" style="padding:3px 7px;">
+                    🔗
+                </a>
+                {% elif entry.status == 'reserved' %}
+                <!-- View reservation for reserved IPs -->
+                <a href="/reservations?search={{ entry.ip }}"
+                   class="btn btn-sm btn-secondary" title="View Reservation" style="padding:3px 7px;">
+                    🔗
+                </a>
+                {% endif %}
+            </div>
         </td>
     </tr>
-    {% endif %}
     {% endfor %}
     </tbody>
 </table>
+</div>
+<div id="no-results" style="display:none;text-align:center;padding:32px;color:var(--text-muted);font-size:13px;">
+    No addresses match your search.
 </div>
 </div>
 
@@ -120,7 +162,7 @@
         <button onclick="closeEditModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
-    <!-- Read-only info for dynamic/reserved -->
+    <!-- Read-only Kea info for dynamic/reserved -->
     <div id="edit-kea-info" style="display:none;background:var(--surface2);border-radius:var(--radius);
          padding:12px 14px;margin-bottom:16px;font-size:12px;">
         <div style="font-weight:600;margin-bottom:6px;color:var(--text-muted);text-transform:uppercase;
@@ -132,7 +174,6 @@
     <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', subnet_id=subnet_id) }}">
         <input type="hidden" name="ip" id="edit-ip-input">
 
-        <!-- Status selector — only for available/static -->
         <div id="edit-status-group" class="form-group">
             <label>Status</label>
             <select name="ipam_status" id="edit-ipam-status" style="width:100%;">
@@ -140,25 +181,21 @@
                 <option value="static">● Static — manually designated address</option>
             </select>
             <div class="form-hint">
-                Setting an IP as <strong>Static</strong> marks it as intentionally assigned
-                outside of Kea's dynamic pool (e.g. a router, NAS, or printer with a manually
-                configured IP). It does not affect Kea's DHCP pool configuration.
+                <strong>Static</strong> marks an IP as intentionally assigned outside Kea's
+                dynamic pool (router, NAS, printer, etc.). Does not affect Kea configuration.
             </div>
         </div>
 
-        <!-- Label — editable for available/static, hidden for dynamic/reserved -->
         <div id="edit-label-group" class="form-group">
             <label>Label <span style="font-size:11px;color:var(--text-muted);">(e.g. "Router", "NAS", "Printer")</span></label>
             <input type="text" name="label" id="edit-label" maxlength="100" style="width:100%;" autocomplete="off">
         </div>
 
-        <!-- Owner — editable for available/static, hidden for dynamic/reserved -->
         <div id="edit-owner-group" class="form-group">
             <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "Lab gear")</span></label>
             <input type="text" name="owner" id="edit-owner" maxlength="100" style="width:100%;" autocomplete="off">
         </div>
 
-        <!-- Notes — always editable -->
         <div class="form-group">
             <label>Notes</label>
             <textarea name="notes" id="edit-notes" rows="3"
@@ -184,16 +221,69 @@
 </form>
 
 <script>
-var _editStatus = '';
+// ── Filter state ──────────────────────────────────────────────────────────────
+var _currentFilter = '{{ status_filter }}';
+var _currentSearch = '';
 
+function filterTable() {
+    var q = document.getElementById('ipam-search').value.toLowerCase().trim();
+    _currentSearch = q;
+    document.getElementById('search-clear').style.display = q ? '' : 'none';
+
+    var rows = document.querySelectorAll('#ipam-table tbody tr');
+    var visible = 0;
+    rows.forEach(function(row) {
+        var status  = row.getAttribute('data-status');
+        var search  = row.getAttribute('data-search').toLowerCase();
+        var matchFilter = (_currentFilter === 'all' || status === _currentFilter);
+        var matchSearch = (!q || search.includes(q));
+        var show = matchFilter && matchSearch;
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+
+    // Result count hint
+    var rc = document.getElementById('result-count');
+    var total = rows.length;
+    if (q || _currentFilter !== 'all') {
+        rc.style.display = '';
+        rc.textContent = visible + ' of ' + total + ' addresses shown';
+    } else {
+        rc.style.display = 'none';
+    }
+
+    document.getElementById('no-results').style.display = visible === 0 ? '' : 'none';
+}
+
+function setFilter(f) {
+    _currentFilter = f;
+    // Update button styles
+    document.querySelectorAll('#filter-tabs button').forEach(function(btn) {
+        var isActive = btn.getAttribute('data-filter') === f;
+        btn.className = btn.className
+            .replace('btn-primary', 'btn-secondary')
+            .replace('btn-secondary', 'btn-secondary');
+        if (isActive) {
+            btn.className = btn.className.replace('btn-secondary', 'btn-primary');
+        } else {
+            btn.className = btn.className.replace('btn-primary', 'btn-secondary');
+        }
+    });
+    filterTable();
+}
+
+function clearSearch() {
+    document.getElementById('ipam-search').value = '';
+    filterTable();
+    document.getElementById('ipam-search').focus();
+}
+
+// ── Edit modal ────────────────────────────────────────────────────────────────
 function openEditModal(ip, status, label, owner, notes, hostname, mac) {
-    _editStatus = status;
-
     document.getElementById('edit-ip').textContent = ip;
     document.getElementById('edit-ip-input').value = ip;
     document.getElementById('clear-ip-input').value = ip;
 
-    // Status label
     var statusLabels = {
         available: '○ Available',
         dynamic:   '● Dynamic lease',
@@ -202,29 +292,22 @@ function openEditModal(ip, status, label, owner, notes, hostname, mac) {
     };
     document.getElementById('edit-status-label').textContent = statusLabels[status] || status;
 
-    // Set current values
     document.getElementById('edit-label').value = label;
     document.getElementById('edit-owner').value = owner;
     document.getElementById('edit-notes').value = notes.replace(/\\n/g, '\n');
-    document.getElementById('edit-ipam-status').value = (status === 'static') ? 'static' : 'available';
+    document.getElementById('edit-ipam-status').value = status === 'static' ? 'static' : 'available';
 
-    // Show/hide fields based on status
     var isDynRes = (status === 'dynamic' || status === 'reserved');
 
-    // Kea info section
     var keaInfo = document.getElementById('edit-kea-info');
     keaInfo.style.display = isDynRes && (hostname || mac) ? '' : 'none';
     document.getElementById('edit-kea-hostname').textContent = hostname ? '🖥 ' + hostname : '';
     document.getElementById('edit-kea-mac').textContent = mac ? '🔌 ' + mac : '';
 
-    // Status selector — only for available/static
     document.getElementById('edit-status-group').style.display = isDynRes ? 'none' : '';
+    document.getElementById('edit-label-group').style.display  = isDynRes ? 'none' : '';
+    document.getElementById('edit-owner-group').style.display  = isDynRes ? 'none' : '';
 
-    // Label and owner — hide for dynamic/reserved (Kea controls identity)
-    document.getElementById('edit-label-group').style.display = isDynRes ? 'none' : '';
-    document.getElementById('edit-owner-group').style.display = isDynRes ? 'none' : '';
-
-    // Clear button — only if there's something to clear
     document.getElementById('edit-clear-btn').style.display =
         (label || owner || notes) ? '' : 'none';
 
@@ -247,6 +330,9 @@ document.getElementById('edit-modal').addEventListener('click', function(e) {
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeEditModal();
 });
+
+// Apply initial filter state on load
+setFilter('{{ status_filter }}');
 </script>
 
 {% endblock %}

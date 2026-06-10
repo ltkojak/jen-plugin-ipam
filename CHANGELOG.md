@@ -28,3 +28,18 @@
 - **Status selector** for available/static IPs — mark an address as Static to designate it as intentionally assigned outside the DHCP pool (router, NAS, printer, etc.)
 - **"Clear all notes"** button in the modal removes the IPAM entry entirely
 - Setting status back to Available with no other fields also clears the entry cleanly
+
+## [1.2.0] - 2026-06-09
+
+### Search, MAC display, quick links
+
+**Live search** — A search box above the address table filters as you type across IP address, hostname, label, MAC, owner, and notes simultaneously. No page reload — purely client-side filtering so it works instantly across all 500+ addresses in a /23. Combines with the status filter tabs: you can filter to "Reserved" and search within those results. A result count shows how many addresses match. An ✕ button clears the search.
+
+**MAC address column** — MAC addresses for dynamic and reserved IPs are now always visible in the table rather than only appearing in the edit modal. Useful for cross-referencing with physical hardware.
+
+**Quick action links** — second button per row based on IP status:
+- Available / Static → 📌 "Create Reservation" — opens the Add Reservation form with the IP pre-filled
+- Dynamic → 🔗 "View Lease" — links to Leases page filtered to that IP
+- Reserved → 🔗 "View Reservation" — links to Reservations page filtered to that IP
+
+**Filter tabs are now client-side** — the status filter tabs no longer reload the page; they use the same JS filtering as search. Switching between All/Available/Dynamic/Reserved/Static is instant.
