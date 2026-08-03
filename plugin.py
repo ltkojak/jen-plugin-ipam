@@ -56,10 +56,15 @@ def _assert_kea_access(subnet_id):
 
 
 def _is_admin():
-    role = getattr(current_user, "role", None)
-    if role is not None:
-        return role == "admin"
-    return bool(getattr(current_user, "is_admin", False))
+    try:
+        from jen.services.access import is_admin_or_above
+        return is_admin_or_above()
+    except Exception:
+        # Fall back to a direct role check if the import shape ever changes.
+        role = getattr(current_user, "role", None)
+        if role is not None:
+            return role in ("superadmin", "admin")
+        return bool(getattr(current_user, "is_admin", False))
 
 
 def _audit(action, target, detail):

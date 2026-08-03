@@ -1,6 +1,15 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.3.1] - 2026-08-03
+
+### Fix: superadmin couldn't see or use unmanaged subnet controls
+
+**Bug** — `_is_admin()` checked `role == "admin"` only. Jen's actual role system is three-tier (`superadmin` > `admin` > `viewer`, per `jen/services/access.py`), so a `superadmin` account — the top-level role most installs actually log in as — evaluated as *not* admin. This hid the **＋ Add Unmanaged Subnet** button entirely and would have blocked subnet delete as well, even though `admin` accounts worked fine.
+
+**Fix** — `_is_admin()` now delegates to Jen's own `is_admin_or_above()` helper instead of re-deriving role logic in the plugin, so it can't drift out of sync with core again.
+
 ## [1.3.0] - 2026-08-03
+
 
 ### Unmanaged subnets + audit fixes
 
