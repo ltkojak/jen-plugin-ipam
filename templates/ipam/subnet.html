@@ -1,14 +1,27 @@
 {% extends "base.html" %}
 {% block title %}IPAM — {{ subnet.name }}{% endblock %}
 {% block content %}
+{% set unmanaged = (kind == 'u') %}
 
 <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
     <div>
-        <h1>📋 {{ subnet.name }}</h1>
-        <p>{{ subnet.cidr }} · {{ space|length }} addresses</p>
+        <h1>📋 {{ subnet.name }}
+            {% if unmanaged %}
+            <span style="font-size:11px;font-weight:600;color:var(--warning);
+                         border:1px solid var(--warning);border-radius:3px;
+                         padding:2px 6px;margin-left:8px;vertical-align:middle;
+                         text-transform:uppercase;letter-spacing:.04em;">unmanaged</span>
+            {% endif %}
+        </h1>
+        <p>{{ subnet.cidr }} · {{ space|length }} addresses
+           {% if unmanaged and subnet.description %} · {{ subnet.description }}{% endif %}</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
-        <a href="{{ url_for('ipam.export_csv', subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+        {% if unmanaged and is_admin %}
+        <button class="btn btn-secondary btn-sm" style="color:var(--danger);"
+                onclick="deleteSubnet()">🗑 Delete Subnet</button>
+        {% endif %}
         <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
     </div>
 </div>
@@ -20,6 +33,7 @@
             <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.available }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Available</div>
         </div>
+        {% if not unmanaged %}
         <div style="text-align:center;">
             <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ counts.dynamic }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Dynamic</div>
@@ -28,37 +42,46 @@
             <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.reserved }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Reserved</div>
         </div>
+        {% endif %}
         <div style="text-align:center;">
             <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Static</div>
         </div>
         <div style="flex:1;min-width:200px;">
             <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
+                {% if not unmanaged %}
                 <div style="width:{{ (counts.dynamic / space|length * 100)|round }}%;background:var(--primary);"></div>
                 <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
+                {% endif %}
                 <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
             </div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                {{ ((counts.dynamic + counts.reserved + counts.static) / space|length * 100)|round }}% utilised
+                {{ counts.pct }}% utilised
             </div>
         </div>
     </div>
 
     <!-- Search box -->
-    <div style="margin-bottom:10px;">
+    <div style="margin-bottom:10px;position:relative;">
         <input type="text" id="ipam-search"
                placeholder="🔍  Search IP, hostname, label, MAC, owner…"
-               style="width:100%;box-sizing:border-box;"
+               style="width:100%;box-sizing:border-box;padding-right:34px;"
                oninput="filterTable()" autocomplete="off">
+        <button id="search-clear" onclick="clearSearch()" title="Clear search"
+                style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);
+                       background:none;border:none;color:var(--text-muted);font-size:16px;
+                       cursor:pointer;line-height:1;padding:4px;">✕</button>
     </div>
 
     <!-- Filter tabs -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
-        <button onclick="setFilter('all')"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
-        <button onclick="setFilter('available')" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
-        <button onclick="setFilter('dynamic')"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
-        <button onclick="setFilter('reserved')"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
-        <button onclick="setFilter('static')"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
+        <button onclick="setFilter('all')"       class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
+        <button onclick="setFilter('available')" class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
+        {% if not unmanaged %}
+        <button onclick="setFilter('dynamic')"   class="btn btn-sm btn-secondary" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+        <button onclick="setFilter('reserved')"  class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+        {% endif %}
+        <button onclick="setFilter('static')"    class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -100,36 +123,28 @@
             {{ entry.notes or '—' }}
         </td>
         <td style="white-space:nowrap;">
-            <!-- Action buttons -->
             <div style="display:flex;gap:4px;align-items:center;">
-                <button class="btn btn-sm btn-secondary" title="Edit" onclick="openEditModal(
-                    '{{ entry.ip }}',
-                    '{{ entry.status }}',
-                    '{{ entry.label | replace("'", "\\'") | replace('"', '&quot;') }}',
-                    '{{ entry.owner | replace("'", "\\'") | replace('"', '&quot;') }}',
-                    '{{ entry.notes | replace("'", "\\'") | replace('"', '&quot;') | replace("\n", "\\n") }}',
-                    '{{ entry.hostname or "" }}',
-                    '{{ entry.mac or "" }}'
-                )">✏️</button>
+                <button class="btn btn-sm btn-secondary" title="Edit"
+                        data-entry='{{ entry|tojson }}'
+                        onclick="openEditModal(this)">✏️</button>
 
+                {% if not unmanaged %}
                 {% if entry.status == 'available' or entry.status == 'static' %}
-                <!-- Create Reservation for available/static IPs -->
                 <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}"
                    class="btn btn-sm btn-secondary" title="Create Reservation" style="padding:3px 7px;">
                     📌
                 </a>
                 {% elif entry.status == 'dynamic' %}
-                <!-- View lease for dynamic IPs -->
                 <a href="/leases?search={{ entry.ip }}"
                    class="btn btn-sm btn-secondary" title="View Lease" style="padding:3px 7px;">
                     🔗
                 </a>
                 {% elif entry.status == 'reserved' %}
-                <!-- View reservation for reserved IPs -->
                 <a href="/reservations?search={{ entry.ip }}"
                    class="btn btn-sm btn-secondary" title="View Reservation" style="padding:3px 7px;">
                     🔗
                 </a>
+                {% endif %}
                 {% endif %}
             </div>
         </td>
@@ -167,18 +182,20 @@
         <div id="edit-kea-mac"></div>
     </div>
 
-    <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', subnet_id=subnet_id) }}">
+    <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', kind=kind, subnet_id=subnet_id) }}">
         <input type="hidden" name="ip" id="edit-ip-input">
 
         <div id="edit-status-group" class="form-group">
             <label>Status</label>
             <select name="ipam_status" id="edit-ipam-status" style="width:100%;">
-                <option value="available">○ Available — no annotation</option>
+                <option value="available">○ Available — annotation only</option>
                 <option value="static">● Static — manually designated address</option>
             </select>
             <div class="form-hint">
-                <strong>Static</strong> marks an IP as intentionally assigned outside Kea's
-                dynamic pool (router, NAS, printer, etc.). Does not affect Kea configuration.
+                <strong>Static</strong> marks an IP as intentionally assigned
+                {% if unmanaged %}on this unmanaged network.{% else %}outside Kea's
+                dynamic pool (router, NAS, printer, etc.). Does not affect Kea configuration.{% endif %}
+                <strong>Available</strong> keeps the address available while preserving any notes.
             </div>
         </div>
 
@@ -186,6 +203,19 @@
             <label>Label <span style="font-size:11px;color:var(--text-muted);">(e.g. "Router", "NAS", "Printer")</span></label>
             <input type="text" name="label" id="edit-label" maxlength="100" style="width:100%;" autocomplete="off">
         </div>
+
+        {% if unmanaged %}
+        <div id="edit-hostname-group" class="form-group">
+            <label>Hostname <span style="font-size:11px;color:var(--text-muted);">(optional — no DHCP here, so recorded manually)</span></label>
+            <input type="text" name="hostname" id="edit-hostname" maxlength="255" style="width:100%;" autocomplete="off">
+        </div>
+
+        <div id="edit-mac-group" class="form-group">
+            <label>MAC Address <span style="font-size:11px;color:var(--text-muted);">(optional)</span></label>
+            <input type="text" name="mac" id="edit-mac" maxlength="17" class="mono" style="width:100%;"
+                   placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off">
+        </div>
+        {% endif %}
 
         <div id="edit-owner-group" class="form-group">
             <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "Lab gear")</span></label>
@@ -211,19 +241,31 @@
 
 <!-- Hidden delete form -->
 <form id="clear-form" method="POST"
-      action="{{ url_for('ipam.delete_entry', subnet_id=subnet_id) }}"
+      action="{{ url_for('ipam.delete_entry', kind=kind, subnet_id=subnet_id) }}"
       style="display:none;">
     <input type="hidden" name="ip" id="clear-ip-input">
 </form>
 
+{% if unmanaged and is_admin %}
+<!-- Hidden subnet delete form -->
+<form id="subnet-delete-form" method="POST"
+      action="{{ url_for('ipam.delete_subnet', subnet_id=subnet_id) }}"
+      style="display:none;"></form>
+{% endif %}
+
 <script>
+var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
+
 // ── Filter state ──────────────────────────────────────────────────────────────
-var _currentFilter = '{{ status_filter }}';
+var _currentFilter = 'all';
 var _currentSearch = '';
 
 function filterTable() {
-    var q = document.getElementById('ipam-search').value.toLowerCase().trim();
+    var input = document.getElementById('ipam-search');
+    var q = input.value.toLowerCase().trim();
     _currentSearch = q;
+
+    document.getElementById('search-clear').style.display = q ? '' : 'none';
 
     var rows = document.querySelectorAll('#ipam-table tbody tr');
     var visible = 0;
@@ -237,7 +279,6 @@ function filterTable() {
         if (show) visible++;
     });
 
-    // Result count hint
     var rc = document.getElementById('result-count');
     var total = rows.length;
     if (q || _currentFilter !== 'all') {
@@ -252,17 +293,10 @@ function filterTable() {
 
 function setFilter(f) {
     _currentFilter = f;
-    // Update button styles
     document.querySelectorAll('#filter-tabs button').forEach(function(btn) {
         var isActive = btn.getAttribute('data-filter') === f;
-        btn.className = btn.className
-            .replace('btn-primary', 'btn-secondary')
-            .replace('btn-secondary', 'btn-secondary');
-        if (isActive) {
-            btn.className = btn.className.replace('btn-secondary', 'btn-primary');
-        } else {
-            btn.className = btn.className.replace('btn-primary', 'btn-secondary');
-        }
+        btn.classList.toggle('btn-primary', isActive);
+        btn.classList.toggle('btn-secondary', !isActive);
     });
     filterTable();
 }
@@ -274,10 +308,12 @@ function clearSearch() {
 }
 
 // ── Edit modal ────────────────────────────────────────────────────────────────
-function openEditModal(ip, status, label, owner, notes, hostname, mac) {
-    document.getElementById('edit-ip').textContent = ip;
-    document.getElementById('edit-ip-input').value = ip;
-    document.getElementById('clear-ip-input').value = ip;
+function openEditModal(btn) {
+    var e = JSON.parse(btn.dataset.entry);
+
+    document.getElementById('edit-ip').textContent = e.ip;
+    document.getElementById('edit-ip-input').value = e.ip;
+    document.getElementById('clear-ip-input').value = e.ip;
 
     var statusLabels = {
         available: '○ Available',
@@ -285,26 +321,31 @@ function openEditModal(ip, status, label, owner, notes, hostname, mac) {
         reserved:  '● Kea reservation',
         static:    '● Static'
     };
-    document.getElementById('edit-status-label').textContent = statusLabels[status] || status;
+    document.getElementById('edit-status-label').textContent = statusLabels[e.status] || e.status;
 
-    document.getElementById('edit-label').value = label;
-    document.getElementById('edit-owner').value = owner;
-    document.getElementById('edit-notes').value = notes.replace(/\\n/g, '\n');
-    document.getElementById('edit-ipam-status').value = status === 'static' ? 'static' : 'available';
+    document.getElementById('edit-label').value = e.label || '';
+    document.getElementById('edit-owner').value = e.owner || '';
+    document.getElementById('edit-notes').value = e.notes || '';
+    document.getElementById('edit-ipam-status').value = e.status === 'static' ? 'static' : 'available';
 
-    var isDynRes = (status === 'dynamic' || status === 'reserved');
+    if (UNMANAGED) {
+        document.getElementById('edit-hostname').value = e.hostname || '';
+        document.getElementById('edit-mac').value = e.mac || '';
+    }
+
+    var isDynRes = (e.status === 'dynamic' || e.status === 'reserved');
 
     var keaInfo = document.getElementById('edit-kea-info');
-    keaInfo.style.display = isDynRes && (hostname || mac) ? '' : 'none';
-    document.getElementById('edit-kea-hostname').textContent = hostname ? '🖥 ' + hostname : '';
-    document.getElementById('edit-kea-mac').textContent = mac ? '🔌 ' + mac : '';
+    keaInfo.style.display = isDynRes && (e.hostname || e.mac) ? '' : 'none';
+    document.getElementById('edit-kea-hostname').textContent = e.hostname ? '🖥 ' + e.hostname : '';
+    document.getElementById('edit-kea-mac').textContent = e.mac ? '🔌 ' + e.mac : '';
 
     document.getElementById('edit-status-group').style.display = isDynRes ? 'none' : '';
     document.getElementById('edit-label-group').style.display  = isDynRes ? 'none' : '';
     document.getElementById('edit-owner-group').style.display  = isDynRes ? 'none' : '';
 
     document.getElementById('edit-clear-btn').style.display =
-        (label || owner || notes) ? '' : 'none';
+        (e.label || e.owner || e.notes || (UNMANAGED && (e.hostname || e.mac))) ? '' : 'none';
 
     document.getElementById('edit-modal').style.display = 'flex';
 }
@@ -318,6 +359,14 @@ function clearEntry() {
         document.getElementById('clear-form').submit();
     });
 }
+
+{% if unmanaged and is_admin %}
+function deleteSubnet() {
+    jenConfirm('Delete this unmanaged subnet and ALL its IPAM entries? This cannot be undone.', function() {
+        document.getElementById('subnet-delete-form').submit();
+    });
+}
+{% endif %}
 
 document.getElementById('edit-modal').addEventListener('click', function(e) {
     if (e.target === this) closeEditModal();

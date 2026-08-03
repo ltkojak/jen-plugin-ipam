@@ -2,29 +2,39 @@
 {% block title %}IPAM Lite{% endblock %}
 {% block content %}
 
-<div class="page-header">
-    <h1>📋 IPAM Lite</h1>
-    <p>IP address space across all subnets.</p>
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>📋 IPAM Lite</h1>
+        <p>IP address space across all subnets.</p>
+    </div>
+    {% if is_admin %}
+    <button class="btn btn-primary" onclick="openAddSubnetModal()">＋ Add Unmanaged Subnet</button>
+    {% endif %}
 </div>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
-{% for subnet_id, info in subnet_map.items() %}
-{% set s = summaries.get(subnet_id, {}) %}
-<a href="{{ url_for('ipam.subnet_detail', subnet_id=subnet_id) }}"
+{% macro subnet_card(kind, subnet_id, info, s, unmanaged=False) %}
+<a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id) }}"
    style="text-decoration:none;color:inherit;">
 <div class="card" style="cursor:pointer;transition:border-color .15s;"
      onmouseover="this.style.borderColor='var(--primary)'"
      onmouseout="this.style.borderColor='var(--border)'">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
         <div>
-            <div style="font-weight:600;font-size:14px;">{{ info.name }}</div>
+            <div style="font-weight:600;font-size:14px;">
+                {{ info.name }}
+                {% if unmanaged %}
+                <span style="font-size:10px;font-weight:600;color:var(--warning);
+                             border:1px solid var(--warning);border-radius:3px;
+                             padding:1px 5px;margin-left:6px;vertical-align:middle;
+                             text-transform:uppercase;letter-spacing:.04em;">unmanaged</span>
+                {% endif %}
+            </div>
             <div style="font-size:12px;color:var(--text-muted);">{{ info.cidr }}</div>
         </div>
         <span style="font-size:20px;font-weight:700;color:var(--primary);">{{ s.pct or 0 }}%</span>
     </div>
 
     {% if s.total %}
-    <!-- Stacked utilisation bar -->
     <div style="height:8px;border-radius:4px;background:var(--surface2);display:flex;overflow:hidden;margin-bottom:10px;">
         {% if s.dynamic %}
         <div style="width:{{ (s.dynamic / s.total * 100)|round }}%;background:var(--primary);"></div>
@@ -41,12 +51,14 @@
         <span style="color:var(--text-muted);">
             <span style="color:var(--success);">●</span> {{ s.available }} available
         </span>
+        {% if not unmanaged %}
         <span style="color:var(--text-muted);">
             <span style="color:var(--primary);">●</span> {{ s.dynamic }} dynamic
         </span>
         <span style="color:var(--text-muted);">
             <span style="color:var(--success);">●</span> {{ s.reserved }} reserved
         </span>
+        {% endif %}
         <span style="color:var(--text-muted);">
             <span style="color:var(--warning);">●</span> {{ s.static }} static
         </span>
@@ -56,15 +68,87 @@
     {% endif %}
 </div>
 </a>
+{% endmacro %}
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+{% for subnet_id, info in subnet_map.items() %}
+{{ subnet_card('kea', subnet_id, info, summaries.get(('kea', subnet_id), {})) }}
+{% endfor %}
+{% for subnet_id, info in ipam_subnets.items() %}
+{{ subnet_card('u', subnet_id, info, summaries.get(('u', subnet_id), {}), unmanaged=True) }}
 {% endfor %}
 </div>
+
+{% if not subnet_map and not ipam_subnets %}
+<div class="card" style="text-align:center;color:var(--text-muted);padding:32px;">
+    No subnets available.
+</div>
+{% endif %}
 
 <div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);margin-top:4px;">
     <strong style="color:var(--text);">Status legend:</strong>
     &nbsp;<span style="color:var(--primary);">● Dynamic</span> — active DHCP lease
     &nbsp;·&nbsp;<span style="color:var(--success);">● Reserved</span> — Kea reservation
-    &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually noted in IPAM
-    &nbsp;·&nbsp;Available — no lease, reservation, or note
+    &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually designated in IPAM
+    &nbsp;·&nbsp;Available — no lease, reservation, or designation
+    &nbsp;·&nbsp;<strong style="color:var(--text);">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
 </div>
+
+{% if is_admin %}
+<!-- Add Unmanaged Subnet Modal -->
+<div id="add-subnet-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
+            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">＋ Add Unmanaged Subnet</h3>
+        <button onclick="closeAddSubnetModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <form method="POST" action="{{ url_for('ipam.add_subnet') }}">
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" name="name" maxlength="100" style="width:100%;"
+                   placeholder="e.g. Backend Network" required autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label>CIDR</label>
+            <input type="text" name="cidr" style="width:100%;" class="mono"
+                   placeholder="e.g. 172.16.10.0/24" required autocomplete="off">
+            <div class="form-hint">
+                Must not overlap any Kea-managed or existing unmanaged subnet.
+                Maximum size /16; anything larger than a /22 renders a very large table.
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Description <span style="font-size:11px;color:var(--text-muted);">(optional)</span></label>
+            <textarea name="description" rows="2" style="width:100%;resize:vertical;"
+                      placeholder="What lives on this network…"></textarea>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Add Subnet</button>
+            <button type="button" class="btn btn-secondary" onclick="closeAddSubnetModal()">Cancel</button>
+        </div>
+    </form>
+</div>
+</div>
+
+<script>
+function openAddSubnetModal() {
+    document.getElementById('add-subnet-modal').style.display = 'flex';
+}
+function closeAddSubnetModal() {
+    document.getElementById('add-subnet-modal').style.display = 'none';
+}
+document.getElementById('add-subnet-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeAddSubnetModal();
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeAddSubnetModal();
+});
+</script>
+{% endif %}
 
 {% endblock %}
