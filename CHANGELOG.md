@@ -1,5 +1,36 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.3.2] - 2026-08-15
+
+### Fixed: every POST form was missing its CSRF token — guaranteed 403 on save/delete/add-subnet
+
+**Bug** — none of this plugin's four POST forms (`edit-form` /
+save_entry, `clear-form` / delete_entry, `subnet-delete-form` /
+delete_subnet, and the add-unmanaged-subnet form) included a
+`csrf_token` hidden input. `csrf_token()` is registered as an
+app-wide Jinja global by Jen's core `context_processor` and is
+genuinely available inside plugin templates — it was just never
+called in any of these four forms. Every submission through any of
+them hit Jen's CSRF middleware and got rejected with a 403
+"session security token is missing or expired," regardless of how
+valid the actual session was.
+
+**Fix** — `<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">`
+added to all four forms in `templates/ipam/subnet.html` and
+`templates/ipam/index.html`.
+
+**Verification** — reproduced against this plugin's own real code
+running inside a real Jen instance: real login, real session, real
+CSRF middleware enabled (the test suite it was found from normally
+runs with CSRF checks off, which is exactly why this had no test
+coverage). Confirmed all four forms genuinely 403 before the fix and
+genuinely succeed after it, using a token actually extracted from the
+real rendered page rather than a synthetic one — including this
+plugin's own DB migrations and full `kind`-parameterized route set
+(`/entry/<kind>/<subnet_id>`, `/subnets/add`, `/subnets/<id>/delete`),
+not just the simpler bundled copy of this plugin that ships inside
+jen-kea itself (which had the same bug, fixed separately there).
+
 ## [1.3.1] - 2026-08-03
 
 ### Fix: superadmin couldn't see or use unmanaged subnet controls

@@ -108,6 +108,7 @@
     </div>
 
     <form method="POST" action="{{ url_for('ipam.add_subnet') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Name</label>
             <input type="text" name="name" maxlength="100" style="width:100%;"
