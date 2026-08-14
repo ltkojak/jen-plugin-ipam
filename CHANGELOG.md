@@ -1,5 +1,33 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.3.3] - 2026-08-15
+
+### Feature: multi-select status filtering on the subnet detail page
+
+Requested directly: previously the status filter tabs (All / Available
+/ Dynamic / Reserved / Static) were single-select — clicking one
+deselected any other. Now Available/Dynamic/Reserved/Static toggle
+independently and can be combined (e.g. show Reserved + Static
+together, excluding Available/Dynamic), while "All" remains a distinct
+action that clears back to showing everything rather than being one
+more option to combine with the others. Deselecting the last active
+filter falls back to "All" automatically rather than leaving a
+confusing empty table with no obvious way back.
+
+Pure client-side change — `_currentFilter` is now a `Set` instead of a
+single string, with `toggleFilter(f)` replacing the old `setFilter(f)`
+for the four specific status buttons and a new `setFilterAll()` for
+the "All" button specifically. No backend or database changes.
+
+**Verification:** the actual filter logic (not a reimplementation of
+it) was extracted and run directly under Node.js against 13 scenarios
+covering the exact requested behavior — toggling multiple filters on
+together, toggling one back off while others remain active, the
+empty-selection fallback to "All", and a three-way combination — all
+passed. No headless browser was available to click-test the UI itself,
+so this covers the actual selection/matching logic precisely rather
+than the full rendered page.
+
 ## [1.3.2] - 2026-08-15
 
 ### Fixed: every POST form was missing its CSRF token — guaranteed 403 on save/delete/add-subnet

@@ -75,13 +75,13 @@
 
     <!-- Filter tabs -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
-        <button onclick="setFilter('all')"       class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
-        <button onclick="setFilter('available')" class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
+        <button onclick="setFilterAll()"          class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
+        <button onclick="toggleFilter('available')" class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
         {% if not unmanaged %}
-        <button onclick="setFilter('dynamic')"   class="btn btn-sm btn-secondary" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
-        <button onclick="setFilter('reserved')"  class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+        <button onclick="toggleFilter('dynamic')"   class="btn btn-sm btn-secondary" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+        <button onclick="toggleFilter('reserved')"  class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
         {% endif %}
-        <button onclick="setFilter('static')"    class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
+        <button onclick="toggleFilter('static')"    class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -261,7 +261,15 @@
 var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
 
 // ── Filter state ──────────────────────────────────────────────────────────────
-var _currentFilter = 'all';
+// v1.3.3: multi-select status filtering. _currentFilter is a Set —
+// "All" is a distinct clear-everything action (deselects every other
+// filter and selects nothing but itself), while Available/Dynamic/
+// Reserved/Static each toggle independently and can be combined, e.g.
+// Reserved + Static shown together, Available + Dynamic excluded.
+// An empty set (the last active toggle just got clicked off) falls
+// back to "all" automatically, rather than showing zero rows with no
+// obvious way to recover other than remembering to click "All".
+var _currentFilter = new Set(['all']);
 var _currentSearch = '';
 
 function filterTable() {
@@ -276,7 +284,7 @@ function filterTable() {
     rows.forEach(function(row) {
         var status  = row.getAttribute('data-status');
         var search  = row.getAttribute('data-search').toLowerCase();
-        var matchFilter = (_currentFilter === 'all' || status === _currentFilter);
+        var matchFilter = _currentFilter.has('all') || _currentFilter.has(status);
         var matchSearch = (!q || search.includes(q));
         var show = matchFilter && matchSearch;
         row.style.display = show ? '' : 'none';
@@ -285,7 +293,7 @@ function filterTable() {
 
     var rc = document.getElementById('result-count');
     var total = rows.length;
-    if (q || _currentFilter !== 'all') {
+    if (q || !_currentFilter.has('all')) {
         rc.style.display = '';
         rc.textContent = visible + ' of ' + total + ' addresses shown';
     } else {
@@ -295,13 +303,33 @@ function filterTable() {
     document.getElementById('no-results').style.display = visible === 0 ? '' : 'none';
 }
 
-function setFilter(f) {
-    _currentFilter = f;
+function _syncFilterButtons() {
     document.querySelectorAll('#filter-tabs button').forEach(function(btn) {
-        var isActive = btn.getAttribute('data-filter') === f;
+        var isActive = _currentFilter.has(btn.getAttribute('data-filter'));
         btn.classList.toggle('btn-primary', isActive);
         btn.classList.toggle('btn-secondary', !isActive);
     });
+}
+
+function setFilterAll() {
+    _currentFilter = new Set(['all']);
+    _syncFilterButtons();
+    filterTable();
+}
+
+function toggleFilter(f) {
+    _currentFilter.delete('all');
+    if (_currentFilter.has(f)) {
+        _currentFilter.delete(f);
+    } else {
+        _currentFilter.add(f);
+    }
+    // Nothing left selected — fall back to "all" rather than a
+    // confusing empty table with no obvious way back.
+    if (_currentFilter.size === 0) {
+        _currentFilter.add('all');
+    }
+    _syncFilterButtons();
     filterTable();
 }
 
@@ -379,8 +407,16 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeEditModal();
 });
 
-// Apply initial filter state on load
-setFilter('{{ status_filter }}');
+// Apply initial filter state on load — status_filter is always a single
+// value from the URL (?filter=static etc., or "all" by default); the
+// multi-select toggling above only applies to clicks after that.
+{% if status_filter == 'all' %}
+setFilterAll();
+{% else %}
+_currentFilter = new Set(['{{ status_filter }}']);
+_syncFilterButtons();
+filterTable();
+{% endif %}
 </script>
 
 {% endblock %}
