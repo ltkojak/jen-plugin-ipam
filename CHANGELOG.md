@@ -1,5 +1,18 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.1] - 2026-08-23
+
+### Fix: version-bump-only release — v1.4.0 never actually shipped
+
+v1.4.0's source was correct, but the repo's `plugin.zip` — the actual
+artifact Jen's Update button downloads from `raw/main/plugin.zip` —
+wasn't rebuilt alongside it, so the update silently kept installing the
+old v1.3.3 code. No functional changes from what v1.4.0 was meant to
+be; this release exists only to get a correctly-built `plugin.zip` onto
+`main` under a version number that was never live. See v1.4.0 below for
+the actual feature changes (import, Planned status, auto-detect
+Static).
+
 ## [1.4.0] - 2026-08-23
 
 ### Feature: import from Netbox, Jen's own export, or other CSV sources
