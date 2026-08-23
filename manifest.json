@@ -1,8 +1,8 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.3.3",
-  "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet \u2014 available, dynamic, reserved, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Export to CSV. Replaces Netbox for simple static IP tracking.",
+  "version": "1.4.0",
+  "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet \u2014 available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
   "requires_jen": "3.6.0",
   "tags": [
@@ -30,6 +30,8 @@
     "ALTER TABLE ipam_static_entries DROP INDEX IF EXISTS ip",
     "ALTER TABLE ipam_static_entries ADD UNIQUE KEY IF NOT EXISTS uniq_ip_kind_subnet (ip, subnet_kind, subnet_id)",
     "ALTER TABLE ipam_static_entries ADD INDEX IF NOT EXISTS idx_kind_subnet (subnet_kind, subnet_id)",
-    "ALTER TABLE ipam_assignment_history ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip"
+    "ALTER TABLE ipam_assignment_history ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip",
+    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS entry_status VARCHAR(20) NULL AFTER is_static",
+    "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
   ]
 }

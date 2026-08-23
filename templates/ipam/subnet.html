@@ -17,6 +17,7 @@
            {% if unmanaged and subnet.description %} · {{ subnet.description }}{% endif %}</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-secondary btn-sm" onclick="openImportModal()">⬆ Import</button>
         <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
         {% if unmanaged and is_admin %}
         <button class="btn btn-secondary btn-sm" style="color:var(--danger);"
@@ -47,6 +48,10 @@
             <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Static</div>
         </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:#8b5cf6;">{{ counts.planned }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Planned</div>
+        </div>
         <div style="flex:1;min-width:200px;">
             <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
                 {% if not unmanaged %}
@@ -54,6 +59,7 @@
                 <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
                 {% endif %}
                 <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
+                <div style="width:{{ (counts.planned / space|length * 100)|round }}%;background:#8b5cf6;"></div>
             </div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
                 {{ counts.pct }}% utilised
@@ -82,6 +88,7 @@
         <button onclick="toggleFilter('reserved')"  class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
         {% endif %}
         <button onclick="toggleFilter('static')"    class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
+        <button onclick="toggleFilter('planned')"   class="btn btn-sm btn-secondary" data-filter="planned">Planned ({{ counts.planned }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -113,6 +120,8 @@
             <span style="font-size:12px;color:var(--success);">● Reserved</span>
             {% elif entry.status == 'static' %}
             <span style="font-size:12px;color:var(--warning);">● Static</span>
+            {% elif entry.status == 'planned' %}
+            <span style="font-size:12px;color:#8b5cf6;">◔ Planned</span>
             {% endif %}
         </td>
         <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
@@ -129,7 +138,7 @@
                         onclick="openEditModal(this)">✏️</button>
 
                 {% if not unmanaged %}
-                {% if entry.status == 'available' or entry.status == 'static' %}
+                {% if entry.status == 'available' or entry.status == 'static' or entry.status == 'planned' %}
                 <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}"
                    class="btn btn-sm btn-secondary" title="Create Reservation" style="padding:3px 7px;">
                     📌
@@ -191,12 +200,17 @@
             <select name="ipam_status" id="edit-ipam-status" style="width:100%;">
                 <option value="available">○ Available — annotation only</option>
                 <option value="static">● Static — manually designated address</option>
+                <option value="planned">◔ Planned — earmarked for future use</option>
             </select>
             <div class="form-hint">
                 <strong>Static</strong> marks an IP as intentionally assigned
                 {% if unmanaged %}on this unmanaged network.{% else %}outside Kea's
                 dynamic pool (router, NAS, printer, etc.). Does not affect Kea configuration.{% endif %}
-                <strong>Available</strong> keeps the address available while preserving any notes.
+                <strong>Planned</strong> marks it as set aside for something coming up, without
+                calling it a DHCP reservation. <strong>Available</strong> keeps the address
+                available while preserving any notes. Typing a label, owner, or note here
+                switches this away from Available automatically — pick Planned yourself if
+                that's what you mean instead of Static.
             </div>
         </div>
 
@@ -235,6 +249,46 @@
             <button type="button" id="edit-clear-btn" class="btn btn-secondary"
                     style="margin-left:auto;color:var(--danger);"
                     onclick="clearEntry()">Clear all notes</button>
+        </div>
+    </form>
+</div>
+</div>
+
+<!-- Import Modal -->
+<div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
+            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">⬆ Import Addresses</h3>
+        <button onclick="closeImportModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <form method="POST" action="{{ url_for('ipam.import_preview', kind=kind, subnet_id=subnet_id) }}"
+          enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Source</label>
+            <select name="import_format" style="width:100%;">
+                <option value="jen">Jen IPAM export (CSV)</option>
+                <option value="netbox">Netbox — IP Addresses export (CSV)</option>
+                <option value="generic">Other / generic CSV</option>
+            </select>
+            <div class="form-hint">
+                Generic CSVs are matched by column name (ip/address, label/name, owner/tenant,
+                notes/description, hostname, mac, status). Rows outside {{ subnet.cidr }} are
+                skipped. You'll get a preview to review before anything is saved.
+            </div>
+        </div>
+        <div class="form-group">
+            <label>CSV file</label>
+            <input type="file" name="import_file" accept=".csv" required style="width:100%;">
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Preview Import</button>
+            <button type="button" class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
         </div>
     </form>
 </div>
@@ -351,14 +405,20 @@ function openEditModal(btn) {
         available: '○ Available',
         dynamic:   '● Dynamic lease',
         reserved:  '● Kea reservation',
-        static:    '● Static'
+        static:    '● Static',
+        planned:   '◔ Planned'
     };
     document.getElementById('edit-status-label').textContent = statusLabels[e.status] || e.status;
 
     document.getElementById('edit-label').value = e.label || '';
     document.getElementById('edit-owner').value = e.owner || '';
     document.getElementById('edit-notes').value = e.notes || '';
-    document.getElementById('edit-ipam-status').value = e.status === 'static' ? 'static' : 'available';
+    document.getElementById('edit-ipam-status').value =
+        (e.status === 'static' || e.status === 'planned') ? e.status : 'available';
+
+    // Reset the auto-status-switch tracking for this modal session — see
+    // _onEditFieldInput below.
+    _statusManuallySet = false;
 
     if (UNMANAGED) {
         document.getElementById('edit-hostname').value = e.hostname || '';
@@ -386,11 +446,59 @@ function closeEditModal() {
     document.getElementById('edit-modal').style.display = 'none';
 }
 
+// ── Auto-switch away from "Available" once something is typed ──────────────
+// Typing a label/owner/note/etc into an address that's currently just
+// "Available" almost always means the person is designating it, not
+// leaving it available with a stray annotation — so default that to
+// Static. If they explicitly pick a status themselves (including picking
+// Planned, or picking Available back again), that choice is respected for
+// the rest of this modal session and the auto-switch stops touching it.
+var _statusManuallySet = false;
+
+function _editHasContent() {
+    var ids = ['edit-label', 'edit-owner', 'edit-notes'];
+    if (UNMANAGED) ids = ids.concat(['edit-hostname', 'edit-mac']);
+    return ids.some(function(id) {
+        var el = document.getElementById(id);
+        return el && el.value.trim() !== '';
+    });
+}
+
+function _onEditFieldInput() {
+    if (_statusManuallySet) return;
+    var statusSel = document.getElementById('edit-ipam-status');
+    var hasContent = _editHasContent();
+    if (hasContent && statusSel.value === 'available') {
+        statusSel.value = 'static';
+    } else if (!hasContent && statusSel.value === 'static') {
+        statusSel.value = 'available';
+    }
+}
+
+['edit-label', 'edit-owner', 'edit-notes', 'edit-hostname', 'edit-mac'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', _onEditFieldInput);
+});
+document.getElementById('edit-ipam-status').addEventListener('change', function() {
+    _statusManuallySet = true;
+});
+
 function clearEntry() {
     jenConfirm('Clear all notes and labels for this IP?', function() {
         document.getElementById('clear-form').submit();
     });
 }
+
+// ── Import modal ──────────────────────────────────────────────────────────────
+function openImportModal() {
+    document.getElementById('import-modal').style.display = 'flex';
+}
+function closeImportModal() {
+    document.getElementById('import-modal').style.display = 'none';
+}
+document.getElementById('import-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeImportModal();
+});
 
 {% if unmanaged and is_admin %}
 function deleteSubnet() {
@@ -404,7 +512,10 @@ document.getElementById('edit-modal').addEventListener('click', function(e) {
     if (e.target === this) closeEditModal();
 });
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeEditModal();
+    if (e.key === 'Escape') {
+        closeEditModal();
+        closeImportModal();
+    }
 });
 
 // Apply initial filter state on load — status_filter is always a single

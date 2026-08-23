@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}IPAM — Import Preview{% endblock %}
+{% block content %}
+{% set unmanaged = (kind == 'u') %}
+{% set format_labels = {'jen': 'Jen IPAM export', 'netbox': 'Netbox', 'generic': 'Generic CSV'} %}
+
+<div class="page-header">
+    <div>
+        <h1>⬆ Import Preview — {{ subnet.name }}</h1>
+        <p>Source: {{ format_labels.get(import_format, import_format) }} · nothing has been saved yet</p>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ rows|length }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Ready to import</div>
+        </div>
+        {% if skipped %}
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--text-muted);">{{ skipped }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Skipped (outside {{ subnet.cidr }})</div>
+        </div>
+        {% endif %}
+        <div style="font-size:12px;color:var(--text-muted);flex:1;min-width:200px;">
+            Existing entries for the same IP will be overwritten with the imported values.
+            Review the rows below, then confirm to save.
+        </div>
+    </div>
+</div>
+
+<div class="card" style="padding:0;">
+<div class="table-wrap" style="max-height:60vh;overflow-y:auto;">
+<table>
+    <thead><tr>
+        <th>IP Address</th>
+        <th>Status</th>
+        <th>Label / Hostname</th>
+        {% if unmanaged %}<th>MAC Address</th>{% endif %}
+        <th>Owner</th>
+        <th>Notes</th>
+    </tr></thead>
+    <tbody>
+    {% for entry in rows[:300] %}
+    <tr>
+        <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
+        <td style="font-size:12px;">
+            {% if entry.status == 'static' %}<span style="color:var(--warning);">● Static</span>
+            {% elif entry.status == 'planned' %}<span style="color:#8b5cf6;">◔ Planned</span>
+            {% else %}<span style="color:var(--text-muted);">○ Available</span>{% endif %}
+        </td>
+        <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
+        {% if unmanaged %}<td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>{% endif %}
+        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);max-width:220px;overflow:hidden;
+                   text-overflow:ellipsis;white-space:nowrap;">{{ entry.notes or '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% if rows|length > 300 %}
+<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:12px;">
+    Showing first 300 of {{ rows|length }} rows — all {{ rows|length }} will be imported on confirm.
+</div>
+{% endif %}
+</div>
+
+<form method="POST" action="{{ url_for('ipam.import_commit', kind=kind, subnet_id=subnet_id) }}"
+      style="margin-top:16px;display:flex;gap:10px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="payload" value='{{ payload|e }}'>
+    <button type="submit" class="btn btn-primary">Confirm Import ({{ rows|length }})</button>
+    <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary">Cancel</a>
+</form>
+
+{% endblock %}

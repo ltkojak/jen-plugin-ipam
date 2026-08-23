@@ -1,5 +1,68 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.0] - 2026-08-23
+
+### Feature: import from Netbox, Jen's own export, or other CSV sources
+
+New "⬆ Import" button on each subnet's detail page. Upload a CSV and
+pick a source:
+
+- **Jen IPAM export** — round-trips Jen's own `Export CSV` output.
+  Rows with `status=dynamic`/`reserved` are skipped on import (that's
+  Kea-derived state, not a manual IPAM annotation); `static` and
+  `planned` rows import as-is.
+- **Netbox** — reads a Netbox "IP Addresses" export. Matches `address`
+  (tolerates the `10.0.0.5/24` CIDR form Netbox uses), `status`,
+  `dns_name`, `description`/`comments`, and `tenant`. Netbox's
+  `reserved` status maps to Jen's new `planned` status (see below) —
+  both mean "set aside, not actively assigned yet." `dhcp`/`slaac`
+  rows are skipped since Kea already owns that state for managed
+  subnets.
+- **Generic CSV** — column-name sniffing for anything else (`ip`/
+  `address`, `label`/`name`, `owner`/`tenant`, `notes`/`description`,
+  `hostname`, `mac`, `status`), so exports from other tools can be
+  imported without a Jen- or Netbox-specific format.
+
+Nothing is saved on upload. Import is a two-step preview → confirm
+flow: rows outside the target subnet's CIDR are filtered out and
+counted, the parsed rows are shown in a table, and only "Confirm
+Import" writes to `ipam_static_entries` (upserted the same way a
+manual edit is — importing the same IP twice just updates it). Each
+import writes a summary line to the audit log and one `import` row
+per address to `ipam_assignment_history`. Capped at 2000 importable
+rows per file.
+
+### Feature: third "Planned" status, and auto-detecting Static on edit
+
+The edit-address modal previously offered only Available and Static.
+Two related changes:
+
+- Typing into Label/Owner/Notes (or Hostname/MAC on unmanaged subnets)
+  while an address is still set to Available now switches the Status
+  dropdown to Static automatically, rather than silently leaving it as
+  a plain annotation. Clearing those fields back to empty switches it
+  back to Available. Manually picking a status yourself (including
+  picking Available back again, or picking Planned) is respected for
+  the rest of that modal session — the auto-switch only ever acts on
+  an untouched Available dropdown.
+- Added a third status, **Planned** — "earmarked for future use,"
+  distinct from a Kea reservation (`reserved` status is Kea's own DHCP
+  reservation and is unrelated). Shown throughout with a violet ◔/●
+  marker: subnet summary card, filter tabs, table rows, edit modal,
+  index-page subnet cards and legend, CSV export, and import preview.
+
+DB: new `entry_status` column on `ipam_static_entries`
+(`static`/`planned`/`available`), backfilled once from the existing
+`is_static` flag. `is_static` is kept in sync going forward for
+backward compatibility rather than dropped.
+
+### Fix: reservation quick-link now shows for Planned addresses
+
+The 📌 "Create Reservation" quick-link in the table's action column
+previously only appeared for Available and Static rows; it now also
+appears for Planned, since a planned address is exactly the kind of
+row someone is likely to turn into a real reservation next.
+
 ## [1.3.3] - 2026-08-15
 
 ### Feature: multi-select status filtering on the subnet detail page

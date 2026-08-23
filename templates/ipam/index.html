@@ -45,6 +45,9 @@
         {% if s.static %}
         <div style="width:{{ (s.static / s.total * 100)|round }}%;background:var(--warning);"></div>
         {% endif %}
+        {% if s.planned %}
+        <div style="width:{{ (s.planned / s.total * 100)|round }}%;background:#8b5cf6;"></div>
+        {% endif %}
     </div>
 
     <div style="display:flex;gap:16px;font-size:11px;flex-wrap:wrap;">
@@ -61,6 +64,9 @@
         {% endif %}
         <span style="color:var(--text-muted);">
             <span style="color:var(--warning);">●</span> {{ s.static }} static
+        </span>
+        <span style="color:var(--text-muted);">
+            <span style="color:#8b5cf6;">●</span> {{ s.planned }} planned
         </span>
     </div>
     {% else %}
@@ -90,6 +96,7 @@
     &nbsp;<span style="color:var(--primary);">● Dynamic</span> — active DHCP lease
     &nbsp;·&nbsp;<span style="color:var(--success);">● Reserved</span> — Kea reservation
     &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually designated in IPAM
+    &nbsp;·&nbsp;<span style="color:#8b5cf6;">● Planned</span> — earmarked for future use, not yet a reservation
     &nbsp;·&nbsp;Available — no lease, reservation, or designation
     &nbsp;·&nbsp;<strong style="color:var(--text);">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
 </div>
