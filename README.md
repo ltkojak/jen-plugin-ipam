@@ -21,21 +21,17 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 - **Search + filter** — live client-side search across IP, hostname, label, MAC, owner, and notes; status filter tabs
 - **CSV export** per subnet
 - **Assignment history** logged with user and timestamp (UTC)
-- Respects Jen subnet access control; unmanaged subnet add/delete is admin-only
+- Respects Jen subnet access control: a user restricted to specific Kea subnets sees only those, and none of the unmanaged subnets; unmanaged subnet add/delete is admin-only
 
 ## Installation
 
-Open Jen → Settings → Plugins and click **Install** next to IPAM Lite.
+Open Jen → **Settings → Plugins** and click **Install** next to IPAM Lite. Jen downloads the release pinned in its plugin registry, verifies its checksum, and enables it; restart Jen when prompted.
 
-Or manually:
-```bash
-cd /opt/jen/plugins
-mkdir ipam && cd ipam
-curl -LO https://github.com/ltkojak/jen-plugin-ipam/raw/main/plugin.zip
-unzip plugin.zip
-touch .enabled
-sudo systemctl restart jen
-```
+To install by hand instead (a checkout without registry access), unzip `plugin.zip` from the release tag you want into `/var/lib/jen/plugins/ipam/`, then enable it from Settings → Plugins and restart Jen.
+
+## Development
+
+`python3 tools/verify.py --build` rebuilds `plugin.zip` deterministically from the tree and runs the same checks CI runs on every push and tag: the zip matches the tree byte-for-byte, no template carries an inline event handler or an un-nonce'd `<script>` (Jen's CSP executes neither), `manifest.json`'s version matches the top `CHANGELOG.md` entry, and `plugin.py` compiles and passes ruff. The committed `plugin.zip` is the artifact Jen installs, so rebuild it in the same commit as any change.
 
 ## Version History
 

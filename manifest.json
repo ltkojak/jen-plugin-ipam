@@ -1,7 +1,7 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet \u2014 available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
   "requires_jen": "3.6.0",

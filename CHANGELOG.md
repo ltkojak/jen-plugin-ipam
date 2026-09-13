@@ -1,5 +1,18 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.3] - 2026-09-13
+
+### Housekeeping: dead `.enabled` marker, stale install docs
+
+Dropped the in-tree `.enabled` file — Jen has kept its enable marker
+outside the plugin directory (`/var/lib/jen/plugins-enabled/`) since
+v5.13.0, so the one shipped in the zip did nothing. The README's manual
+install steps still told you to `touch .enabled` in `/opt/jen/plugins`,
+a path Jen no longer installs to; they now describe the Settings →
+Plugins install (the registry-pinned, checksum-verified path) and the
+actual manual location. Added a Development section covering
+`tools/verify.py --build` and what CI enforces. No code changes.
+
 ## [1.4.2] - 2026-09-13
 
 ### Fix: unmanaged subnets ignored Jen's subnet restrictions
