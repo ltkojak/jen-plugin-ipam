@@ -1,5 +1,17 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.6] - 2026-09-13
+
+### Housekeeping: the IPv4-only note, back from the bundled copy
+
+Jen v5.0's IPv6 rollout added a gated "IPAM Lite tracks IPv4 addresses
+only" notice to the overview page (shown only when Jen's IPv6 support
+is enabled) and an "IPv4 only" scope note to the README — but only in
+the copy bundled inside `jen-kea`, never here; Jen's own test suite
+checks for both, and caught the gap the moment the bundled copy was
+resynced from this repo. Both are now here, so the two copies are
+identical. No functional change.
+
 ## [1.4.5] - 2026-09-13
 
 ### Housekeeping: same lint rules as Jen

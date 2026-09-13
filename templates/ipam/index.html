@@ -12,6 +12,10 @@
     {% endif %}
 </div>
 
+{% if ipv6_enabled %}
+<div class="alert alert-info">ℹ️ IPAM Lite tracks IPv4 addresses only. IPv6 subnets aren't shown here — see <a href="/subnets">Subnets</a> for IPv6 lease/reservation counts.</div>
+{% endif %}
+
 <style>
 .ipam-subnet-card { cursor: pointer; transition: border-color .15s; }
 .ipam-subnet-card:hover { border-color: var(--primary); }
