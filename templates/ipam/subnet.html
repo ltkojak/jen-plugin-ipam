@@ -17,11 +17,10 @@
            {% if unmanaged and subnet.description %} · {{ subnet.description }}{% endif %}</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
-        <button class="btn btn-secondary btn-sm" onclick="openImportModal()">⬆ Import</button>
+        <button id="ipam-import-btn" class="btn btn-secondary btn-sm">⬆ Import</button>
         <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
         {% if unmanaged and is_admin %}
-        <button class="btn btn-secondary btn-sm" style="color:var(--danger);"
-                onclick="deleteSubnet()">🗑 Delete Subnet</button>
+        <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm" style="color:var(--danger);">🗑 Delete Subnet</button>
         {% endif %}
         <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
     </div>
@@ -72,8 +71,8 @@
         <input type="text" id="ipam-search"
                placeholder="🔍  Search IP, hostname, label, MAC, owner…"
                style="width:100%;box-sizing:border-box;padding-right:34px;"
-               oninput="filterTable()" autocomplete="off">
-        <button id="search-clear" onclick="clearSearch()" title="Clear search"
+               autocomplete="off">
+        <button id="search-clear" title="Clear search"
                 style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);
                        background:none;border:none;color:var(--text-muted);font-size:16px;
                        cursor:pointer;line-height:1;padding:4px;">✕</button>
@@ -81,14 +80,14 @@
 
     <!-- Filter tabs -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
-        <button onclick="setFilterAll()"          class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
-        <button onclick="toggleFilter('available')" class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
         {% if not unmanaged %}
-        <button onclick="toggleFilter('dynamic')"   class="btn btn-sm btn-secondary" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
-        <button onclick="toggleFilter('reserved')"  class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
         {% endif %}
-        <button onclick="toggleFilter('static')"    class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
-        <button onclick="toggleFilter('planned')"   class="btn btn-sm btn-secondary" data-filter="planned">Planned ({{ counts.planned }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="planned">Planned ({{ counts.planned }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -133,9 +132,8 @@
         </td>
         <td style="white-space:nowrap;">
             <div style="display:flex;gap:4px;align-items:center;">
-                <button class="btn btn-sm btn-secondary" title="Edit"
-                        data-entry='{{ entry|tojson }}'
-                        onclick="openEditModal(this)">✏️</button>
+                <button class="btn btn-sm btn-secondary ipam-edit-btn" title="Edit"
+                        data-entry='{{ entry|tojson }}'>✏️</button>
 
                 {% if not unmanaged %}
                 {% if entry.status == 'available' or entry.status == 'static' or entry.status == 'planned' %}
@@ -179,7 +177,7 @@
             <h3 style="margin:0;">✏️ Edit <span id="edit-ip" style="color:var(--primary);font-family:monospace;"></span></h3>
             <div id="edit-status-label" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
         </div>
-        <button onclick="closeEditModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button id="edit-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
     <!-- Read-only Kea info for dynamic/reserved -->
@@ -245,10 +243,9 @@
 
         <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary">Save</button>
-            <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button type="button" id="edit-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button type="button" id="edit-clear-btn" class="btn btn-secondary"
-                    style="margin-left:auto;color:var(--danger);"
-                    onclick="clearEntry()">Clear all notes</button>
+                    style="margin-left:auto;color:var(--danger);">Clear all notes</button>
         </div>
     </form>
 </div>
@@ -263,7 +260,7 @@
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
         <h3 style="margin:0;">⬆ Import Addresses</h3>
-        <button onclick="closeImportModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button id="import-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
     <form method="POST" action="{{ url_for('ipam.import_preview', kind=kind, subnet_id=subnet_id) }}"
@@ -288,7 +285,7 @@
         </div>
         <div style="display:flex;gap:10px;margin-top:8px;">
             <button type="submit" class="btn btn-primary">Preview Import</button>
-            <button type="button" class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
+            <button type="button" id="import-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
     </form>
 </div>
@@ -311,7 +308,7 @@
 </form>
 {% endif %}
 
-<script>
+<script nonce="{{ csp_nonce }}">
 var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
 
 // ── Filter state ──────────────────────────────────────────────────────────────
@@ -393,6 +390,19 @@ function clearSearch() {
     document.getElementById('ipam-search').focus();
 }
 
+document.getElementById('ipam-search').addEventListener('input', filterTable);
+document.getElementById('search-clear').addEventListener('click', clearSearch);
+document.getElementById('filter-tabs').addEventListener('click', function(e) {
+    var btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    var f = btn.getAttribute('data-filter');
+    if (f === 'all') {
+        setFilterAll();
+    } else {
+        toggleFilter(f);
+    }
+});
+
 // ── Edit modal ────────────────────────────────────────────────────────────────
 function openEditModal(btn) {
     var e = JSON.parse(btn.dataset.entry);
@@ -446,6 +456,13 @@ function closeEditModal() {
     document.getElementById('edit-modal').style.display = 'none';
 }
 
+document.getElementById('edit-modal-close-btn').addEventListener('click', closeEditModal);
+document.getElementById('edit-modal-cancel-btn').addEventListener('click', closeEditModal);
+document.getElementById('ipam-table').addEventListener('click', function(e) {
+    var btn = e.target.closest('.ipam-edit-btn');
+    if (btn) openEditModal(btn);
+});
+
 // ── Auto-switch away from "Available" once something is typed ──────────────
 // Typing a label/owner/note/etc into an address that's currently just
 // "Available" almost always means the person is designating it, not
@@ -489,6 +506,8 @@ function clearEntry() {
     });
 }
 
+document.getElementById('edit-clear-btn').addEventListener('click', clearEntry);
+
 // ── Import modal ──────────────────────────────────────────────────────────────
 function openImportModal() {
     document.getElementById('import-modal').style.display = 'flex';
@@ -499,6 +518,9 @@ function closeImportModal() {
 document.getElementById('import-modal').addEventListener('click', function(e) {
     if (e.target === this) closeImportModal();
 });
+document.getElementById('ipam-import-btn').addEventListener('click', openImportModal);
+document.getElementById('import-modal-close-btn').addEventListener('click', closeImportModal);
+document.getElementById('import-modal-cancel-btn').addEventListener('click', closeImportModal);
 
 {% if unmanaged and is_admin %}
 function deleteSubnet() {
@@ -506,6 +528,7 @@ function deleteSubnet() {
         document.getElementById('subnet-delete-form').submit();
     });
 }
+document.getElementById('ipam-delete-subnet-btn').addEventListener('click', deleteSubnet);
 {% endif %}
 
 document.getElementById('edit-modal').addEventListener('click', function(e) {

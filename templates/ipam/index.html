@@ -8,16 +8,19 @@
         <p>IP address space across all subnets.</p>
     </div>
     {% if is_admin %}
-    <button class="btn btn-primary" onclick="openAddSubnetModal()">＋ Add Unmanaged Subnet</button>
+    <button id="ipam-add-subnet-btn" class="btn btn-primary">＋ Add Unmanaged Subnet</button>
     {% endif %}
 </div>
+
+<style>
+.ipam-subnet-card { cursor: pointer; transition: border-color .15s; }
+.ipam-subnet-card:hover { border-color: var(--primary); }
+</style>
 
 {% macro subnet_card(kind, subnet_id, info, s, unmanaged=False) %}
 <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id) }}"
    style="text-decoration:none;color:inherit;">
-<div class="card" style="cursor:pointer;transition:border-color .15s;"
-     onmouseover="this.style.borderColor='var(--primary)'"
-     onmouseout="this.style.borderColor='var(--border)'">
+<div class="card ipam-subnet-card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
         <div>
             <div style="font-weight:600;font-size:14px;">
@@ -111,7 +114,7 @@
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
         <h3 style="margin:0;">＋ Add Unmanaged Subnet</h3>
-        <button onclick="closeAddSubnetModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button id="ipam-add-subnet-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
     <form method="POST" action="{{ url_for('ipam.add_subnet') }}">
@@ -137,19 +140,22 @@
         </div>
         <div style="display:flex;gap:10px;margin-top:8px;">
             <button type="submit" class="btn btn-primary">Add Subnet</button>
-            <button type="button" class="btn btn-secondary" onclick="closeAddSubnetModal()">Cancel</button>
+            <button type="button" id="ipam-add-subnet-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
     </form>
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function openAddSubnetModal() {
     document.getElementById('add-subnet-modal').style.display = 'flex';
 }
 function closeAddSubnetModal() {
     document.getElementById('add-subnet-modal').style.display = 'none';
 }
+document.getElementById('ipam-add-subnet-btn').addEventListener('click', openAddSubnetModal);
+document.getElementById('ipam-add-subnet-close-btn').addEventListener('click', closeAddSubnetModal);
+document.getElementById('ipam-add-subnet-cancel-btn').addEventListener('click', closeAddSubnetModal);
 document.getElementById('add-subnet-modal').addEventListener('click', function(e) {
     if (e.target === this) closeAddSubnetModal();
 });

@@ -1,5 +1,33 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.2] - 2026-09-13
+
+### Fix: Content-Security-Policy compatibility (no inline scripts)
+
+Jen v5.22.0 dropped `'unsafe-inline'` from its script-src CSP — every
+`<script>` tag now needs a per-request nonce, and inline event-handler
+attributes (`onclick=`, `oninput=`, `onmouseover=`, etc.) are simply
+never executed under that policy. This plugin's two templates
+(`index.html`, `subnet.html`) still had ~19 inline handlers and two
+un-nonce'd `<script>` blocks from before that change, so every button,
+filter tab, and the per-row edit action silently stopped working the
+moment CSP enforcement was turned on — nothing errored, the browser
+just refused to run the attribute.
+
+Every inline handler is now bound via `addEventListener` (delegated on
+the containers that already existed — `#filter-tabs`, `#ipam-table` —
+for the per-row edit button and the filter tabs, so a new row or a new
+tab doesn't need a new listener), both `<script>` blocks carry
+`nonce="{{ csp_nonce }}"`, and the two `onmouseover`/`onmouseout`
+handlers on the subnet-card hover effect became a plain CSS `:hover`
+rule instead of JS entirely. No functional or visual change — every
+button does exactly what it did before, just via a CSP-compliant
+binding.
+
+Also corrected `manifest.json`'s `changelog_url`, which pointed at the
+copy of this file bundled inside the main `jen-kea` repo instead of
+this repo's own — stale since this plugin was split out on its own.
+
 ## [1.4.1] - 2026-08-23
 
 ### Fix: version-bump-only release — v1.4.0 never actually shipped
