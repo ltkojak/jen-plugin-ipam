@@ -3,6 +3,7 @@ IPAM Lite plugin for Jen.
 Full IP address space management for Kea-managed and unmanaged subnets.
 Version lives in manifest.json — not duplicated here.
 """
+
 import csv
 import io
 import ipaddress
@@ -11,16 +12,18 @@ import logging
 import os as _os
 import re
 
-from flask import (Blueprint, flash, make_response,
-                   redirect, render_template, request, url_for)
+from flask import Blueprint, flash, make_response, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint("ipam", __name__,
-               template_folder="templates",
-               root_path=_os.path.dirname(_os.path.abspath(__file__)),
-               url_prefix="/network/ipam")
+bp = Blueprint(
+    "ipam",
+    __name__,
+    template_folder="templates",
+    root_path=_os.path.dirname(_os.path.abspath(__file__)),
+    url_prefix="/network/ipam",
+)
 
 # URL kind → DB kind. 'kea' = Kea-managed subnet, 'u' = unmanaged (IPAM-only).
 _KIND_DB = {"kea": "kea", "u": "ipam"}
@@ -65,29 +68,35 @@ _GENERIC_HEADER_ALIASES = {
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+
 def _jen_db():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
 
 
 def _kea_db():
     from jen.models.db import get_kea_db
+
     return get_kea_db()
 
 
 def _accessible_subnets():
     from jen.services.access import get_accessible_subnet_map
+
     return get_accessible_subnet_map()
 
 
 def _assert_kea_access(subnet_id):
     from jen.services.access import assert_subnet_access
+
     return assert_subnet_access(subnet_id)
 
 
 def _is_admin():
     try:
         from jen.services.access import is_admin_or_above
+
         return is_admin_or_above()
     except Exception:
         # Fall back to a direct role check if the import shape ever changes.
@@ -100,6 +109,7 @@ def _is_admin():
 def _audit(action, target, detail):
     try:
         from jen.models import user as _user
+
         _user.audit(action, target, detail)
     except Exception as e:
         logger.error(f"IPAM: audit failed: {e}")
@@ -112,7 +122,7 @@ def _normalize_mac(raw):
     cleaned = re.sub(r"[^0-9a-fA-F]", "", raw).lower()
     if len(cleaned) != 12:
         return None
-    mac = ":".join(cleaned[i:i + 2] for i in range(0, 12, 2))
+    mac = ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
     return mac if _MAC_RE.match(mac) else None
 
 
@@ -121,12 +131,13 @@ def _format_identifier(hex_str, ident_type):
     if not hex_str:
         return ""
     if ident_type == 0 and len(hex_str) == 12:
-        return ":".join(hex_str[i:i + 2] for i in range(0, 12, 2)).lower()
+        return ":".join(hex_str[i : i + 2] for i in range(0, 12, 2)).lower()
     # Non-MAC identifier (client-id, DUID, circuit-id) — show raw hex, labelled.
     return f"id:{hex_str.lower()}"
 
 
 # ── Unmanaged subnet store ────────────────────────────────────────────────────
+
 
 def _get_ipam_subnets():
     """Return {id: {name, cidr, description}} for all unmanaged subnets."""
@@ -134,9 +145,7 @@ def _get_ipam_subnets():
     db = _jen_db()
     try:
         with db.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, cidr, description FROM ipam_subnets ORDER BY cidr"
-            )
+            cur.execute("SELECT id, name, cidr, description FROM ipam_subnets ORDER BY cidr")
             for row in cur.fetchall():
                 subnets[row["id"]] = {
                     "name": row["name"],
@@ -156,6 +165,7 @@ def _get_subnet(kind, subnet_id):
 
 
 # ── Address space ─────────────────────────────────────────────────────────────
+
 
 def _build_address_space(kind, subnet_id, cidr):
     """
@@ -181,13 +191,16 @@ def _build_address_space(kind, subnet_id, cidr):
         try:
             db = _kea_db()
             with db.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT inet_ntoa(l.address) AS ip,
                            l.hostname,
                            HEX(l.hwaddr) AS mac_hex
                     FROM lease4 l
                     WHERE l.state=0 AND l.subnet_id=%s
-                """, (subnet_id,))
+                """,
+                    (subnet_id,),
+                )
                 for row in cur.fetchall():
                     if not row["ip"]:
                         continue
@@ -195,7 +208,8 @@ def _build_address_space(kind, subnet_id, cidr):
                         "hostname": row["hostname"] or "",
                         "mac": _format_identifier(row["mac_hex"], 0),
                     }
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT inet_ntoa(h.ipv4_address) AS ip,
                            h.hostname,
                            HEX(h.dhcp_identifier) AS ident_hex,
@@ -205,7 +219,9 @@ def _build_address_space(kind, subnet_id, cidr):
                     WHERE h.dhcp4_subnet_id=%s
                       AND h.ipv4_address IS NOT NULL
                       AND h.ipv4_address > 0
-                """, (subnet_id,))
+                """,
+                    (subnet_id,),
+                )
                 for row in cur.fetchall():
                     reservations[row["ip"]] = {
                         "hostname": row["hostname"] or "",
@@ -224,11 +240,14 @@ def _build_address_space(kind, subnet_id, cidr):
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT ip, label, owner, notes, hostname, mac, is_static, entry_status
                 FROM ipam_static_entries
                 WHERE subnet_kind=%s AND subnet_id=%s
-            """, (db_kind, subnet_id))
+            """,
+                (db_kind, subnet_id),
+            )
             for row in cur.fetchall():
                 ipam_entries[row["ip"]] = row
     except Exception as e:
@@ -281,8 +300,7 @@ def _build_address_space(kind, subnet_id, cidr):
 
 
 def _count_space(space):
-    counts = {"available": 0, "dynamic": 0, "reserved": 0, "static": 0,
-              "planned": 0, "total": len(space)}
+    counts = {"available": 0, "dynamic": 0, "reserved": 0, "static": 0, "planned": 0, "total": len(space)}
     for e in space:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
     counts["used"] = counts["dynamic"] + counts["reserved"] + counts["static"] + counts["planned"]
@@ -311,6 +329,7 @@ def _check_access(kind, subnet_id):
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
+
 
 def _norm_header(h):
     return (h or "").strip().lower()
@@ -378,14 +397,17 @@ def _parse_import_rows(rows, fieldnames, fmt):
                 continue
             if status not in ("static", "planned"):
                 status = "available"
-            parsed.append({
-                "ip": ip, "status": status,
-                "label": (r.get(label_col) or "").strip() if label_col else "",
-                "owner": (r.get(owner_col) or "").strip() if owner_col else "",
-                "notes": (r.get(notes_col) or "").strip() if notes_col else "",
-                "hostname": (r.get(hostname_col) or "").strip() if hostname_col else "",
-                "mac": (r.get(mac_col) or "").strip() if mac_col else "",
-            })
+            parsed.append(
+                {
+                    "ip": ip,
+                    "status": status,
+                    "label": (r.get(label_col) or "").strip() if label_col else "",
+                    "owner": (r.get(owner_col) or "").strip() if owner_col else "",
+                    "notes": (r.get(notes_col) or "").strip() if notes_col else "",
+                    "hostname": (r.get(hostname_col) or "").strip() if hostname_col else "",
+                    "mac": (r.get(mac_col) or "").strip() if mac_col else "",
+                }
+            )
 
     elif fmt == "netbox":
         ip_col = _find_header(fieldnames, ["address", "ip", "ip address"])
@@ -404,25 +426,31 @@ def _parse_import_rows(rows, fieldnames, fmt):
             status = _NETBOX_STATUS_MAP.get(nb_status, "static")
             if status is None:
                 continue
-            notes_parts = [p for p in [
-                (r.get(desc_col) or "").strip() if desc_col else "",
-                (r.get(comments_col) or "").strip() if comments_col else "",
-            ] if p]
+            notes_parts = [
+                p
+                for p in [
+                    (r.get(desc_col) or "").strip() if desc_col else "",
+                    (r.get(comments_col) or "").strip() if comments_col else "",
+                ]
+                if p
+            ]
             dns_name = (r.get(dns_col) or "").strip() if dns_col else ""
-            parsed.append({
-                "ip": ip, "status": status,
-                "label": dns_name,
-                "owner": (r.get(tenant_col) or "").strip() if tenant_col else "",
-                "notes": " — ".join(notes_parts),
-                "hostname": dns_name,
-                "mac": "",
-            })
+            parsed.append(
+                {
+                    "ip": ip,
+                    "status": status,
+                    "label": dns_name,
+                    "owner": (r.get(tenant_col) or "").strip() if tenant_col else "",
+                    "notes": " — ".join(notes_parts),
+                    "hostname": dns_name,
+                    "mac": "",
+                }
+            )
 
     elif fmt == "generic":
         ip_col = _find_header(fieldnames, _GENERIC_HEADER_ALIASES["ip"])
         if not ip_col:
-            return [], ["Couldn't find an IP address column. Columns seen: "
-                         + ", ".join(fieldnames)]
+            return [], ["Couldn't find an IP address column. Columns seen: " + ", ".join(fieldnames)]
         label_col = _find_header(fieldnames, _GENERIC_HEADER_ALIASES["label"])
         owner_col = _find_header(fieldnames, _GENERIC_HEADER_ALIASES["owner"])
         notes_col = _find_header(fieldnames, _GENERIC_HEADER_ALIASES["notes"])
@@ -435,14 +463,17 @@ def _parse_import_rows(rows, fieldnames, fmt):
                 continue
             raw_status = _norm_header(r.get(status_col) if status_col else "")
             status = raw_status if raw_status in ("static", "planned", "available") else "static"
-            parsed.append({
-                "ip": ip, "status": status,
-                "label": (r.get(label_col) or "").strip() if label_col else "",
-                "owner": (r.get(owner_col) or "").strip() if owner_col else "",
-                "notes": (r.get(notes_col) or "").strip() if notes_col else "",
-                "hostname": (r.get(hostname_col) or "").strip() if hostname_col else "",
-                "mac": (r.get(mac_col) or "").strip() if mac_col else "",
-            })
+            parsed.append(
+                {
+                    "ip": ip,
+                    "status": status,
+                    "label": (r.get(label_col) or "").strip() if label_col else "",
+                    "owner": (r.get(owner_col) or "").strip() if owner_col else "",
+                    "notes": (r.get(notes_col) or "").strip() if notes_col else "",
+                    "hostname": (r.get(hostname_col) or "").strip() if hostname_col else "",
+                    "mac": (r.get(mac_col) or "").strip() if mac_col else "",
+                }
+            )
     else:
         return [], ["Unknown import format."]
 
@@ -455,6 +486,7 @@ def _parse_import_rows(rows, fieldnames, fmt):
 
 # ── Routes: overview ──────────────────────────────────────────────────────────
 
+
 @bp.route("/")
 @login_required
 def index():
@@ -464,27 +496,24 @@ def index():
     summaries = {}
     for sid, info in subnet_map.items():
         try:
-            summaries[("kea", sid)] = _count_space(
-                _build_address_space("kea", sid, info["cidr"]))
+            summaries[("kea", sid)] = _count_space(_build_address_space("kea", sid, info["cidr"]))
         except Exception as e:
             logger.error(f"IPAM: summary failed for kea subnet {sid}: {e}")
             summaries[("kea", sid)] = {}
     for sid, info in ipam_subnets.items():
         try:
-            summaries[("u", sid)] = _count_space(
-                _build_address_space("u", sid, info["cidr"]))
+            summaries[("u", sid)] = _count_space(_build_address_space("u", sid, info["cidr"]))
         except Exception as e:
             logger.error(f"IPAM: summary failed for unmanaged subnet {sid}: {e}")
             summaries[("u", sid)] = {}
 
-    return render_template("ipam/index.html",
-                           subnet_map=subnet_map,
-                           ipam_subnets=ipam_subnets,
-                           summaries=summaries,
-                           is_admin=_is_admin())
+    return render_template(
+        "ipam/index.html", subnet_map=subnet_map, ipam_subnets=ipam_subnets, summaries=summaries, is_admin=_is_admin()
+    )
 
 
 # ── Routes: subnet detail / export ────────────────────────────────────────────
+
 
 @bp.route("/subnet/<kind>/<int:subnet_id>")
 @login_required
@@ -500,14 +529,16 @@ def subnet_detail(kind, subnet_id):
     if status_filter not in ("all", "available", "dynamic", "reserved", "static", "planned"):
         status_filter = "all"
 
-    return render_template("ipam/subnet.html",
-                           kind=kind,
-                           subnet_id=subnet_id,
-                           subnet=subnet,
-                           space=space,
-                           counts=counts,
-                           status_filter=status_filter,
-                           is_admin=_is_admin())
+    return render_template(
+        "ipam/subnet.html",
+        kind=kind,
+        subnet_id=subnet_id,
+        subnet=subnet,
+        space=space,
+        counts=counts,
+        status_filter=status_filter,
+        is_admin=_is_admin(),
+    )
 
 
 # Legacy URL from v1.x — redirect to the kea-kind route.
@@ -528,9 +559,7 @@ def export_csv(kind, subnet_id):
     space = _build_address_space(kind, subnet_id, subnet["cidr"])
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=[
-        "ip", "status", "hostname", "mac", "label", "owner", "notes"
-    ])
+    writer = csv.DictWriter(output, fieldnames=["ip", "status", "hostname", "mac", "label", "owner", "notes"])
     writer.writeheader()
     for entry in space:
         writer.writerow({k: entry.get(k, "") for k in writer.fieldnames})
@@ -538,9 +567,7 @@ def export_csv(kind, subnet_id):
     safe_name = _FILENAME_SAFE_RE.sub("_", subnet["name"]).strip("_") or "subnet"
     response = make_response(output.getvalue())
     response.headers["Content-Type"] = "text/csv"
-    response.headers["Content-Disposition"] = (
-        f"attachment; filename=ipam-{safe_name}-{kind}-{subnet_id}.csv"
-    )
+    response.headers["Content-Disposition"] = f"attachment; filename=ipam-{safe_name}-{kind}-{subnet_id}.csv"
     return response
 
 
@@ -588,8 +615,10 @@ def import_preview(kind, subnet_id):
         return redirect(detail_url)
 
     if len(parsed) > _IMPORT_MAX_ROWS:
-        flash(f"That file has {len(parsed)} importable rows — imports are "
-              f"capped at {_IMPORT_MAX_ROWS} rows per file.", "error")
+        flash(
+            f"That file has {len(parsed)} importable rows — imports are capped at {_IMPORT_MAX_ROWS} rows per file.",
+            "error",
+        )
         return redirect(detail_url)
 
     try:
@@ -605,30 +634,36 @@ def import_preview(kind, subnet_id):
         except ValueError:
             in_subnet = False
         mac = _normalize_mac(row.get("mac", "")) or "" if kind == "u" else ""
-        preview_rows.append({
-            "ip": row["ip"],
-            "status": row["status"],
-            "label": row.get("label", "")[:100],
-            "owner": row.get("owner", "")[:100],
-            "notes": row.get("notes", ""),
-            "hostname": row.get("hostname", "")[:255] if kind == "u" else "",
-            "mac": mac,
-            "in_subnet": in_subnet,
-        })
+        preview_rows.append(
+            {
+                "ip": row["ip"],
+                "status": row["status"],
+                "label": row.get("label", "")[:100],
+                "owner": row.get("owner", "")[:100],
+                "notes": row.get("notes", ""),
+                "hostname": row.get("hostname", "")[:255] if kind == "u" else "",
+                "mac": mac,
+                "in_subnet": in_subnet,
+            }
+        )
 
     importable = [r for r in preview_rows if r["in_subnet"]]
     skipped = len(preview_rows) - len(importable)
 
     if not importable:
-        flash(f"None of the {len(preview_rows)} rows in that file fall "
-              f"inside {subnet['cidr']}.", "error")
+        flash(f"None of the {len(preview_rows)} rows in that file fall inside {subnet['cidr']}.", "error")
         return redirect(detail_url)
 
-    return render_template("ipam/import_preview.html",
-                           kind=kind, subnet_id=subnet_id, subnet=subnet,
-                           import_format=fmt,
-                           rows=importable, skipped=skipped,
-                           payload=json.dumps(importable))
+    return render_template(
+        "ipam/import_preview.html",
+        kind=kind,
+        subnet_id=subnet_id,
+        subnet=subnet,
+        import_format=fmt,
+        rows=importable,
+        skipped=skipped,
+        payload=json.dumps(importable),
+    )
 
 
 @bp.route("/subnet/<kind>/<int:subnet_id>/import/commit", methods=["POST"])
@@ -686,7 +721,8 @@ def import_commit(kind, subnet_id):
                 mac = (_normalize_mac(row.get("mac", "")) or "") if kind == "u" else ""
                 is_static = 1 if status == "static" else 0
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO ipam_static_entries
                         (ip, subnet_kind, subnet_id, label, owner, notes,
                          hostname, mac, is_static, entry_status,
@@ -699,21 +735,30 @@ def import_commit(kind, subnet_id):
                         mac=VALUES(mac), is_static=VALUES(is_static),
                         entry_status=VALUES(entry_status),
                         updated_at=UTC_TIMESTAMP()
-                """, (ip, db_kind, subnet_id, label, owner, notes,
-                      hostname, mac, is_static, status))
-                cur.execute("""
+                """,
+                    (ip, db_kind, subnet_id, label, owner, notes, hostname, mac, is_static, status),
+                )
+                cur.execute(
+                    """
                     INSERT INTO ipam_assignment_history
                         (ip, subnet_kind, subnet_id, label, owner, action,
                          acted_at, acted_by)
                     VALUES (%s, %s, %s, %s, %s, 'import', UTC_TIMESTAMP(), %s)
-                """, (ip, db_kind, subnet_id, label, owner, current_user.username))
+                """,
+                    (ip, db_kind, subnet_id, label, owner, current_user.username),
+                )
                 saved += 1
         db.commit()
         if saved:
-            flash(f"Imported {saved} address{'es' if saved != 1 else ''}"
-                  + (f" ({rejected} skipped)" if rejected else "") + ".", "success")
-            _audit("IPAM_IMPORT", subnet["cidr"],
-                   f"kind={db_kind} subnet={subnet_id} saved={saved} rejected={rejected}")
+            flash(
+                f"Imported {saved} address{'es' if saved != 1 else ''}"
+                + (f" ({rejected} skipped)" if rejected else "")
+                + ".",
+                "success",
+            )
+            _audit(
+                "IPAM_IMPORT", subnet["cidr"], f"kind={db_kind} subnet={subnet_id} saved={saved} rejected={rejected}"
+            )
         else:
             flash("Nothing was imported — all rows were rejected.", "error")
     except Exception as e:
@@ -726,6 +771,7 @@ def import_commit(kind, subnet_id):
 
 
 # ── Routes: entries ───────────────────────────────────────────────────────────
+
 
 @bp.route("/entry/<kind>/<int:subnet_id>", methods=["POST"])
 @login_required
@@ -780,21 +826,26 @@ def save_entry(kind, subnet_id):
     entry_status = ipam_status
 
     # Status set back to available with nothing else filled in — clear the entry.
-    if (ipam_status == "available" and not label and not owner
-            and not notes and not hostname and not mac):
+    if ipam_status == "available" and not label and not owner and not notes and not hostname and not mac:
         db = None
         try:
             db = _jen_db()
             with db.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     DELETE FROM ipam_static_entries
                     WHERE ip=%s AND subnet_kind=%s AND subnet_id=%s
-                """, (ip, db_kind, subnet_id))
-                cur.execute("""
+                """,
+                    (ip, db_kind, subnet_id),
+                )
+                cur.execute(
+                    """
                     INSERT INTO ipam_assignment_history
                         (ip, subnet_kind, subnet_id, action, acted_at, acted_by)
                     VALUES (%s, %s, %s, 'cleared', UTC_TIMESTAMP(), %s)
-                """, (ip, db_kind, subnet_id, current_user.username))
+                """,
+                    (ip, db_kind, subnet_id, current_user.username),
+                )
             db.commit()
             flash(f"Entry for {ip} cleared.", "success")
         except Exception as e:
@@ -808,7 +859,8 @@ def save_entry(kind, subnet_id):
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO ipam_static_entries
                     (ip, subnet_kind, subnet_id, label, owner, notes,
                      hostname, mac, is_static, entry_status, created_at, updated_at)
@@ -820,21 +872,21 @@ def save_entry(kind, subnet_id):
                     mac=VALUES(mac), is_static=VALUES(is_static),
                     entry_status=VALUES(entry_status),
                     updated_at=UTC_TIMESTAMP()
-            """, (ip, db_kind, subnet_id, label, owner, notes,
-                  hostname, mac, is_static, entry_status))
-            cur.execute("""
+            """,
+                (ip, db_kind, subnet_id, label, owner, notes, hostname, mac, is_static, entry_status),
+            )
+            cur.execute(
+                """
                 INSERT INTO ipam_assignment_history
                     (ip, subnet_kind, subnet_id, label, owner, action,
                      acted_at, acted_by)
                 VALUES (%s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), %s)
-            """, (ip, db_kind, subnet_id, label, owner,
-                  "static" if is_static else "note",
-                  current_user.username))
+            """,
+                (ip, db_kind, subnet_id, label, owner, "static" if is_static else "note", current_user.username),
+            )
         db.commit()
         flash(f"Entry saved for {ip}.", "success")
-        _audit("IPAM_ENTRY", ip,
-               f"kind={db_kind} subnet={subnet_id} label={label} "
-               f"owner={owner} status={ipam_status}")
+        _audit("IPAM_ENTRY", ip, f"kind={db_kind} subnet={subnet_id} label={label} owner={owner} status={ipam_status}")
     except Exception as e:
         flash(f"Error saving entry: {e}", "error")
     finally:
@@ -866,15 +918,21 @@ def delete_entry(kind, subnet_id):
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 DELETE FROM ipam_static_entries
                 WHERE ip=%s AND subnet_kind=%s AND subnet_id=%s
-            """, (ip, db_kind, subnet_id))
-            cur.execute("""
+            """,
+                (ip, db_kind, subnet_id),
+            )
+            cur.execute(
+                """
                 INSERT INTO ipam_assignment_history
                     (ip, subnet_kind, subnet_id, action, acted_at, acted_by)
                 VALUES (%s, %s, %s, 'removed', UTC_TIMESTAMP(), %s)
-            """, (ip, db_kind, subnet_id, current_user.username))
+            """,
+                (ip, db_kind, subnet_id, current_user.username),
+            )
         db.commit()
         flash(f"Entry for {ip} removed.", "success")
         _audit("IPAM_DELETE", ip, f"kind={db_kind} subnet={subnet_id} entry removed")
@@ -888,6 +946,7 @@ def delete_entry(kind, subnet_id):
 
 
 # ── Routes: unmanaged subnet management (admin only) ─────────────────────────
+
 
 @bp.route("/subnets/add", methods=["POST"])
 @login_required
@@ -917,19 +976,17 @@ def add_subnet():
     cidr = str(network)
 
     # Reject overlap with Kea-managed subnets and existing unmanaged subnets.
-    for sid, info in _accessible_subnets().items():
+    for _sid, info in _accessible_subnets().items():
         try:
             if network.overlaps(ipaddress.IPv4Network(info["cidr"], strict=False)):
-                flash(f"{cidr} overlaps Kea-managed subnet "
-                      f"{info['name']} ({info['cidr']}).", "error")
+                flash(f"{cidr} overlaps Kea-managed subnet {info['name']} ({info['cidr']}).", "error")
                 return redirect(url_for("ipam.index"))
         except ValueError:
             continue
-    for sid, info in _get_ipam_subnets().items():
+    for _sid, info in _get_ipam_subnets().items():
         try:
             if network.overlaps(ipaddress.IPv4Network(info["cidr"], strict=False)):
-                flash(f"{cidr} overlaps unmanaged subnet "
-                      f"{info['name']} ({info['cidr']}).", "error")
+                flash(f"{cidr} overlaps unmanaged subnet {info['name']} ({info['cidr']}).", "error")
                 return redirect(url_for("ipam.index"))
         except ValueError:
             continue
@@ -938,18 +995,23 @@ def add_subnet():
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO ipam_subnets
                     (name, cidr, description, created_at, updated_at)
                 VALUES (%s, %s, %s, UTC_TIMESTAMP(), UTC_TIMESTAMP())
-            """, (name, cidr, description))
+            """,
+                (name, cidr, description),
+            )
         db.commit()
         flash(f"Unmanaged subnet {name} ({cidr}) added.", "success")
         _audit("IPAM_SUBNET_ADD", cidr, f"name={name}")
         if network.prefixlen < _WARN_PREFIX:
-            flash(f"Note: {cidr} contains {network.num_addresses - 2} host "
-                  "addresses — the detail page will render a large table.",
-                  "warning")
+            flash(
+                f"Note: {cidr} contains {network.num_addresses - 2} host "
+                "addresses — the detail page will render a large table.",
+                "warning",
+            )
     except Exception as e:
         flash(f"Error adding subnet: {e}", "error")
     finally:
@@ -975,14 +1037,16 @@ def delete_subnet(subnet_id):
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 DELETE FROM ipam_static_entries
                 WHERE subnet_kind='ipam' AND subnet_id=%s
-            """, (subnet_id,))
+            """,
+                (subnet_id,),
+            )
             cur.execute("DELETE FROM ipam_subnets WHERE id=%s", (subnet_id,))
         db.commit()
-        flash(f"Unmanaged subnet {subnet['name']} ({subnet['cidr']}) "
-              "and its entries deleted.", "success")
+        flash(f"Unmanaged subnet {subnet['name']} ({subnet['cidr']}) and its entries deleted.", "success")
         _audit("IPAM_SUBNET_DELETE", subnet["cidr"], f"name={subnet['name']}")
     except Exception as e:
         flash(f"Error deleting subnet: {e}", "error")
