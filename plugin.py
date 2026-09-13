@@ -8,6 +8,7 @@ import io
 import ipaddress
 import json
 import logging
+import os as _os
 import re
 
 from flask import (Blueprint, flash, make_response,
@@ -16,7 +17,6 @@ from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
-import os as _os
 bp = Blueprint("ipam", __name__,
                template_folder="templates",
                root_path=_os.path.dirname(_os.path.abspath(__file__)),
