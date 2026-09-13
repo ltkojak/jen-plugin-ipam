@@ -10,7 +10,7 @@ import json
 import logging
 import re
 
-from flask import (Blueprint, flash, jsonify, make_response,
+from flask import (Blueprint, flash, make_response,
                    redirect, render_template, request, url_for)
 from flask_login import current_user, login_required
 
@@ -290,11 +290,22 @@ def _count_space(space):
     return counts
 
 
+def _can_see_unmanaged():
+    """Unmanaged subnets aren't part of Jen's SUBNET_MAP, so the per-subnet
+    restriction check can't apply to them — a user whose access is limited
+    to specific Kea subnets gets none of them, the same way an out-of-scope
+    Kea subnet is off-limits."""
+    return bool(getattr(current_user, "all_subnets", False))
+
+
 def _check_access(kind, subnet_id):
     """Access + existence check. Returns subnet info dict, or None if denied/missing."""
     if kind not in _KIND_DB:
         return None
     if kind == "kea" and not _assert_kea_access(subnet_id):
+        return None
+    if kind == "u" and not _can_see_unmanaged():
+        flash("You do not have access to unmanaged subnets.", "error")
         return None
     return _get_subnet(kind, subnet_id)
 
@@ -448,7 +459,7 @@ def _parse_import_rows(rows, fieldnames, fmt):
 @login_required
 def index():
     subnet_map = _accessible_subnets()
-    ipam_subnets = _get_ipam_subnets()
+    ipam_subnets = _get_ipam_subnets() if _can_see_unmanaged() else {}
 
     summaries = {}
     for sid, info in subnet_map.items():
@@ -722,7 +733,8 @@ def save_entry(kind, subnet_id):
     """Create or update an IPAM entry."""
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
-        return jsonify({"error": "Access denied"}), 403
+        flash("Subnet not found or access denied.", "error")
+        return redirect(url_for("ipam.index"))
 
     db_kind = _KIND_DB[kind]
     detail_url = url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id)
@@ -837,7 +849,8 @@ def save_entry(kind, subnet_id):
 def delete_entry(kind, subnet_id):
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
-        return jsonify({"error": "Access denied"}), 403
+        flash("Subnet not found or access denied.", "error")
+        return redirect(url_for("ipam.index"))
 
     db_kind = _KIND_DB[kind]
     detail_url = url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id)

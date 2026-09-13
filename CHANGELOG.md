@@ -2,6 +2,25 @@
 
 ## [1.4.2] - 2026-09-13
 
+### Fix: unmanaged subnets ignored Jen's subnet restrictions
+
+Every route gates a Kea-managed subnet through Jen's own subnet-access
+check, so a user restricted to specific subnets only ever sees those.
+Unmanaged subnets had no equivalent check at all — only "logged in" —
+so a subnet-restricted viewer could open, export, annotate, and clear
+entries on *any* unmanaged subnet, and the overview page listed them
+all regardless. Unmanaged subnets aren't part of Jen's subnet map, so
+there's no per-subnet grant to consult; the fix treats them like any
+other out-of-scope subnet: a user whose access is restricted to
+specific Kea subnets gets none of them, on the overview and on every
+detail/edit/import/export route. Unrestricted users and superadmins
+see no change.
+
+Separately, the entry save/clear routes answered an access-denied
+POST with a raw JSON `403` — but the forms that post to them are plain
+HTML forms, so the browser just showed `{"error": "Access denied"}` as
+a page. They now flash and redirect like every other error path.
+
 ### Fix: Content-Security-Policy compatibility (no inline scripts)
 
 Jen v5.22.0 dropped `'unsafe-inline'` from its script-src CSP — every

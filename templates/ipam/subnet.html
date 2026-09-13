@@ -321,12 +321,10 @@ var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
 // back to "all" automatically, rather than showing zero rows with no
 // obvious way to recover other than remembering to click "All".
 var _currentFilter = new Set(['all']);
-var _currentSearch = '';
 
 function filterTable() {
     var input = document.getElementById('ipam-search');
     var q = input.value.toLowerCase().trim();
-    _currentSearch = q;
 
     document.getElementById('search-clear').style.display = q ? '' : 'none';
 
