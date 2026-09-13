@@ -19,6 +19,7 @@ own tree in a way that silently reaches a plugin:
 Exit status is non-zero on the first failure, with every failing check
 listed. Nothing here needs a database or the `jen` package.
 """
+
 import io
 import json
 import os
@@ -61,8 +62,9 @@ def expected_zip_members():
 
 
 def build_zip_bytes(members):
-    """Deterministic rebuild used only for comparison — fixed timestamps so
-    the same tree always produces the same bytes."""
+    """Deterministic build — fixed timestamps, sorted members — so the same
+    tree always produces the same bytes, whether this is the `--build`
+    that writes plugin.zip or the rebuild check_zip() compares against."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for rel in members:
@@ -154,7 +156,7 @@ def check_templates():
                 tag = sm.group(0)
                 if "nonce=" not in tag:
                     lineno = src.count("\n", 0, sm.start()) + 1
-                    fail(f"{rel}:{lineno}: <script> without nonce=\"{{{{ csp_nonce }}}}\" (blocked by Jen's CSP)")
+                    fail(f'{rel}:{lineno}: <script> without nonce="{{{{ csp_nonce }}}}" (blocked by Jen\'s CSP)')
     if count == 0:
         fail("no templates found under templates/")
     elif not any(f.startswith("templates/") for f in failures):
@@ -191,7 +193,23 @@ def check_zip():
         ok(f"plugin.zip matches the working tree ({len(members)} members)")
 
 
+def build_zip():
+    """`--build`: (re)write plugin.zip deterministically from the working
+    tree — fixed member timestamps, sorted members — so the same tree
+    produces the same bytes (and the same sha256 for registry.json) on
+    any machine. Always run the checks afterwards."""
+    members = expected_zip_members()
+    data = build_zip_bytes(members)
+    with open(os.path.join(ROOT, "plugin.zip"), "wb") as f:
+        f.write(data)
+    import hashlib
+
+    print(f"built plugin.zip ({len(members)} members) sha256 {hashlib.sha256(data).hexdigest()}")
+
+
 def main():
+    if "--build" in sys.argv[1:]:
+        build_zip()
     check_compile()
     manifest = check_manifest()
     check_changelog(manifest)
