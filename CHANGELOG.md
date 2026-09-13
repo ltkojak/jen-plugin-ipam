@@ -1,5 +1,34 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.4.4] - 2026-09-13
+
+### Fix: migrations were MariaDB-only — installs on MySQL 8 could never migrate
+
+Every schema change since v1.3.0 used MariaDB's `ALTER TABLE … ADD
+COLUMN IF NOT EXISTS` / `DROP INDEX IF EXISTS` / `ADD … KEY IF NOT
+EXISTS` forms. MySQL 8 has no `IF [NOT] EXISTS` for those, so on a
+Jen running against MySQL the first ALTER (migration 4) was a syntax
+error, the migration run stopped there, and — since Jen v5.28.1 gates
+activation on migrations — the plugin never enabled. Jen supports both
+databases; this plugin only ever worked on one.
+
+The migrations are now plain, portable DDL, and the manifest uses
+Jen's explicit `{version, description, sql}` format instead of the
+flat positional list, so each migration's number is pinned in the file
+rather than implied by its position. Versions 1–13 map one-to-one onto
+the old positions, so an existing install (which has all thirteen
+recorded) runs nothing new; a fresh install runs all thirteen on
+either database.
+
+Idempotency moved from the SQL to Jen: **this release requires Jen
+v5.28.2**, whose migration runner treats "duplicate column", "duplicate
+key name" and "can't DROP — doesn't exist" as *already in the desired
+state* and records the migration as applied rather than failing. That
+is what lets migration 8 (`DROP INDEX ip`, which undoes v1.1.0's
+`UNIQUE` on `ip`) run cleanly on a fresh database that never had that
+index, without MariaDB's `IF EXISTS`. On an older Jen the manifest is
+refused at install time with the usual "requires Jen …" message.
+
 ## [1.4.3] - 2026-09-13
 
 ### Housekeeping: dead `.enabled` marker, stale install docs

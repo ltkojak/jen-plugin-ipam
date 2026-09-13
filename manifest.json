@@ -1,10 +1,10 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.4.3",
-  "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet \u2014 available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
+  "version": "1.4.4",
+  "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet — available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
-  "requires_jen": "3.6.0",
+  "requires_jen": "5.28.2",
   "tags": [
     "ipam",
     "addresses",
@@ -15,23 +15,23 @@
     {
       "section": "network",
       "label": "IPAM",
-      "icon": "\ud83d\udccb",
+      "icon": "📋",
       "endpoint": "ipam.index"
     }
   ],
   "db_migrations": [
-    "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-    "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))",
-    "CREATE TABLE IF NOT EXISTS ipam_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip",
-    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS hostname VARCHAR(255) NULL AFTER notes",
-    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS mac VARCHAR(17) NULL AFTER hostname",
-    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS is_static TINYINT(1) NOT NULL DEFAULT 1 AFTER mac",
-    "ALTER TABLE ipam_static_entries DROP INDEX IF EXISTS ip",
-    "ALTER TABLE ipam_static_entries ADD UNIQUE KEY IF NOT EXISTS uniq_ip_kind_subnet (ip, subnet_kind, subnet_id)",
-    "ALTER TABLE ipam_static_entries ADD INDEX IF NOT EXISTS idx_kind_subnet (subnet_kind, subnet_id)",
-    "ALTER TABLE ipam_assignment_history ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip",
-    "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS entry_status VARCHAR(20) NULL AFTER is_static",
-    "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
+    {"version": 1, "description": "ipam_static_entries table", "sql": "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"},
+    {"version": 2, "description": "ipam_assignment_history table", "sql": "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))"},
+    {"version": 3, "description": "ipam_subnets table (unmanaged subnets, v1.3.0)", "sql": "CREATE TABLE IF NOT EXISTS ipam_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"},
+    {"version": 4, "description": "entries: subnet_kind (kea vs unmanaged)", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip"},
+    {"version": 5, "description": "entries: manual hostname for unmanaged subnets", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN hostname VARCHAR(255) NULL AFTER notes"},
+    {"version": 6, "description": "entries: manual MAC for unmanaged subnets", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN mac VARCHAR(17) NULL AFTER hostname"},
+    {"version": 7, "description": "entries: is_static flag", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN is_static TINYINT(1) NOT NULL DEFAULT 1 AFTER mac"},
+    {"version": 8, "description": "entries: drop the v1.1.0 UNIQUE(ip) — an IP can now exist per subnet kind", "sql": "ALTER TABLE ipam_static_entries DROP INDEX ip"},
+    {"version": 9, "description": "entries: unique (ip, subnet_kind, subnet_id)", "sql": "ALTER TABLE ipam_static_entries ADD UNIQUE KEY uniq_ip_kind_subnet (ip, subnet_kind, subnet_id)"},
+    {"version": 10, "description": "entries: index (subnet_kind, subnet_id)", "sql": "ALTER TABLE ipam_static_entries ADD INDEX idx_kind_subnet (subnet_kind, subnet_id)"},
+    {"version": 11, "description": "history: subnet_kind", "sql": "ALTER TABLE ipam_assignment_history ADD COLUMN subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip"},
+    {"version": 12, "description": "entries: entry_status (available/static/planned, v1.4.0)", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN entry_status VARCHAR(20) NULL AFTER is_static"},
+    {"version": 13, "description": "entries: backfill entry_status from is_static", "sql": "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"}
   ]
 }
