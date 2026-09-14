@@ -15,10 +15,21 @@
         </h1>
         <p>{{ subnet.cidr }} · {{ space|length }} addresses
            {% if unmanaged and subnet.description %} · {{ subnet.description }}{% endif %}</p>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;display:flex;gap:14px;flex-wrap:wrap;">
+            {% if ctx.gateways %}<span>🚪 Gateway {{ ctx.gateways|join(', ') }}</span>{% endif %}
+            {% if ctx.dns %}<span>🔎 DNS {{ ctx.dns|join(', ') }}</span>{% endif %}
+            {% if pool_texts %}<span>🏊 Pools {{ pool_texts|join(' · ') }}</span>{% elif not unmanaged %}<span>🏊 No DHCP pools in this subnet</span>{% endif %}
+        </div>
+        {% if ctx.notes %}<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">📝 {{ ctx.notes }}</div>{% endif %}
     </div>
-    <div style="display:flex;gap:8px;align-items:center;">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        {% if next_free %}
+        <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">✨ Next free: {{ next_free }}</a>
+        {% endif %}
+        <button id="ipam-range-btn" class="btn btn-secondary btn-sm">⇔ Range…</button>
         <button id="ipam-import-btn" class="btn btn-secondary btn-sm">⬆ Import</button>
-        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">⬇ Netbox CSV</a>
         {% if unmanaged and is_admin %}
         <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm" style="color:var(--danger);">🗑 Delete Subnet</button>
         {% endif %}
@@ -51,6 +62,16 @@
             <div style="font-size:24px;font-weight:700;color:#8b5cf6;">{{ counts.planned }}</div>
             <div style="font-size:11px;color:var(--text-muted);">Planned</div>
         </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--text-muted);">{{ counts.infrastructure }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Infrastructure</div>
+        </div>
+        {% if counts.conflict %}
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--danger);">{{ counts.conflict }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Conflict</div>
+        </div>
+        {% endif %}
         <div style="flex:1;min-width:200px;">
             <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
                 {% if not unmanaged %}
@@ -59,6 +80,8 @@
                 {% endif %}
                 <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
                 <div style="width:{{ (counts.planned / space|length * 100)|round }}%;background:#8b5cf6;"></div>
+                <div style="width:{{ (counts.infrastructure / space|length * 100)|round }}%;background:var(--text-muted);"></div>
+                <div style="width:{{ (counts.conflict / space|length * 100)|round }}%;background:var(--danger);"></div>
             </div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
                 {{ counts.pct }}% utilised
@@ -69,7 +92,7 @@
     <!-- Search box -->
     <div style="margin-bottom:10px;position:relative;">
         <input type="text" id="ipam-search"
-               placeholder="🔍  Search IP, hostname, label, MAC, owner…"
+               placeholder="🔍  Search IP, hostname, label, MAC, owner, device…"
                style="width:100%;box-sizing:border-box;padding-right:34px;"
                autocomplete="off">
         <button id="search-clear" title="Clear search"
@@ -88,8 +111,15 @@
         {% endif %}
         <button class="btn btn-sm btn-secondary" data-filter="static">Static ({{ counts.static }})</button>
         <button class="btn btn-sm btn-secondary" data-filter="planned">Planned ({{ counts.planned }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="infrastructure">Infrastructure ({{ counts.infrastructure }})</button>
+        {% if counts.conflict %}
+        <button class="btn btn-sm btn-secondary" data-filter="conflict" style="color:var(--danger);">⚠ Conflict ({{ counts.conflict }})</button>
+        {% endif %}
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
+    {% if collapsed %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">Runs of available addresses are shown as one row — click a run to expand it, or <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, all=1) }}">show every address</a>.</div>
+    {% endif %}
 </div>
 
 <!-- Address table -->
@@ -100,16 +130,28 @@
         <th>IP Address</th>
         <th>Status</th>
         <th>Hostname / Label</th>
+        {% if not unmanaged %}<th>Device</th>{% endif %}
         <th>MAC Address</th>
         <th>Owner</th>
         <th>Notes</th>
         <th style="width:80px;"></th>
     </tr></thead>
     <tbody>
-    {% for entry in space %}
-    <tr data-status="{{ entry.status }}"
-        data-search="{{ entry.ip }} {{ entry.hostname }} {{ entry.label }} {{ entry.mac }} {{ entry.owner }} {{ entry.notes }}">
-        <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
+    {% for entry in rows %}
+    {% if entry.get('run') %}
+    <tr data-status="available" data-search="{{ entry.first }} {{ entry.last }} available">
+        <td class="mono" style="color:var(--text-muted);" colspan="{% if unmanaged %}7{% else %}8{% endif %}">
+            <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, expand=entry.key) }}" style="color:var(--text-muted);text-decoration:none;">
+                ○ {{ entry.first }} – {{ entry.last }} &nbsp;·&nbsp; {{ entry.count }} available{% if entry.in_pool %} (in a DHCP pool){% else %} (outside the pools){% endif %} &nbsp;▸ expand
+            </a>
+        </td>
+    </tr>
+    {% else %}
+    <tr data-status="{{ entry.status }}" data-ip="{{ entry.ip }}"
+        data-search="{{ entry.ip }} {{ entry.hostname }} {{ entry.label }} {{ entry.mac }} {{ entry.owner }} {{ entry.notes }} {{ entry.device.name if entry.device else '' }} {{ entry.device.manufacturer if entry.device else '' }}">
+        <td class="mono" style="color:var(--primary);font-weight:600;white-space:nowrap;">{{ entry.ip }}
+            {% if not unmanaged %}{% if entry.in_pool %}<span title="Inside a DHCP pool" style="font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;padding:0 4px;margin-left:6px;vertical-align:middle;">pool</span>{% endif %}{% endif %}
+        </td>
         <td>
             {% if entry.status == 'available' %}
             <span style="font-size:12px;color:var(--text-muted);">○ Available</span>
@@ -121,11 +163,20 @@
             <span style="font-size:12px;color:var(--warning);">● Static</span>
             {% elif entry.status == 'planned' %}
             <span style="font-size:12px;color:#8b5cf6;">◔ Planned</span>
+            {% elif entry.status == 'infrastructure' %}
+            <span style="font-size:12px;color:var(--text-muted);" title="Known from the subnet's own configuration">◆ {{ entry.label }}</span>
+            {% elif entry.status == 'conflict' %}
+            <span style="font-size:12px;color:var(--danger);" title="Designated {{ entry.designated }} here, but a DHCP client currently holds this address">⚠ Conflict ({{ entry.designated }} + lease)</span>
             {% endif %}
         </td>
-        <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
+        <td style="font-size:13px;">{% if entry.status == 'infrastructure' %}{{ entry.hostname or '—' }}{% else %}{{ entry.label or entry.hostname or '—' }}{% endif %}</td>
+        {% if not unmanaged %}
+        <td style="font-size:12px;color:var(--text-muted);">
+            {% if entry.device %}{{ entry.device.icon }} {{ entry.device.name or entry.device.manufacturer or '—' }}{% if entry.device.name and entry.device.manufacturer %} <span style="opacity:.7;">({{ entry.device.manufacturer }})</span>{% endif %}{% else %}—{% endif %}
+        </td>
+        {% endif %}
         <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or (entry.device.owner if entry.device else '') or '—' }}</td>
         <td style="font-size:12px;color:var(--text-muted);max-width:180px;
                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             {{ entry.notes or '—' }}
@@ -136,12 +187,13 @@
                         data-entry='{{ entry|tojson }}'>✏️</button>
 
                 {% if not unmanaged %}
-                {% if entry.status == 'available' or entry.status == 'static' or entry.status == 'planned' %}
-                <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}"
+                {% if entry.status in ('available', 'static', 'planned', 'conflict') %}
+                <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}{% if entry.mac and not entry.mac.startswith('id:') %}&mac={{ entry.mac }}{% endif %}"
                    class="btn btn-sm btn-secondary" title="Create Reservation" style="padding:3px 7px;">
                     📌
                 </a>
-                {% elif entry.status == 'dynamic' %}
+                {% endif %}
+                {% if entry.status in ('dynamic', 'conflict') %}
                 <a href="/leases?search={{ entry.ip }}"
                    class="btn btn-sm btn-secondary" title="View Lease" style="padding:3px 7px;">
                     🔗
@@ -156,6 +208,7 @@
             </div>
         </td>
     </tr>
+    {% endif %}
     {% endfor %}
     </tbody>
 </table>
@@ -165,11 +218,26 @@
 </div>
 </div>
 
+<!-- Recent changes -->
+{% if recent_history %}
+<details class="card" style="padding:12px 16px;">
+    <summary style="cursor:pointer;font-weight:600;font-size:13px;">🕘 Recent changes ({{ recent_history|length }}) <a href="{{ url_for('ipam.history', kind=kind, subnet_id=subnet_id, format='csv') }}" style="font-weight:normal;font-size:11px;margin-left:8px;">⬇ history CSV</a></summary>
+    <table style="margin-top:8px;font-size:12px;">
+        <thead><tr><th>When (UTC)</th><th>IP</th><th>Action</th><th>Label</th><th>Owner</th><th>By</th></tr></thead>
+        <tbody>
+        {% for h in recent_history %}
+        <tr><td class="mono">{{ h.acted_at }}</td><td class="mono">{{ h.ip }}</td><td>{{ h.action }}</td><td>{{ h.label or '—' }}</td><td>{{ h.owner or '—' }}</td><td>{{ h.acted_by }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</details>
+{% endif %}
+
 <!-- Edit Modal -->
 <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
      z-index:500;align-items:center;justify-content:center;">
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-            width:min(500px,94vw);max-height:90vh;overflow-y:auto;
+            width:min(520px,94vw);max-height:90vh;overflow-y:auto;
             padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
@@ -180,13 +248,14 @@
         <button id="edit-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
-    <!-- Read-only Kea info for dynamic/reserved -->
+    <!-- Read-only Kea / device info for dynamic/reserved/conflict -->
     <div id="edit-kea-info" style="display:none;background:var(--surface2);border-radius:var(--radius);
          padding:12px 14px;margin-bottom:16px;font-size:12px;">
         <div style="font-weight:600;margin-bottom:6px;color:var(--text-muted);text-transform:uppercase;
-                    letter-spacing:.04em;font-size:10px;">Kea Info (read-only)</div>
+                    letter-spacing:.04em;font-size:10px;">Kea / Devices (read-only)</div>
         <div id="edit-kea-hostname" style="margin-bottom:3px;"></div>
-        <div id="edit-kea-mac"></div>
+        <div id="edit-kea-mac" style="margin-bottom:3px;"></div>
+        <div id="edit-kea-device"></div>
     </div>
 
     <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', kind=kind, subnet_id=subnet_id) }}">
@@ -217,18 +286,16 @@
             <input type="text" name="label" id="edit-label" maxlength="100" style="width:100%;" autocomplete="off">
         </div>
 
-        {% if unmanaged %}
         <div id="edit-hostname-group" class="form-group">
-            <label>Hostname <span style="font-size:11px;color:var(--text-muted);">(optional — no DHCP here, so recorded manually)</span></label>
+            <label>Hostname <span style="font-size:11px;color:var(--text-muted);">(optional — recorded manually; a static host has no lease to supply it)</span></label>
             <input type="text" name="hostname" id="edit-hostname" maxlength="255" style="width:100%;" autocomplete="off">
         </div>
 
         <div id="edit-mac-group" class="form-group">
-            <label>MAC Address <span style="font-size:11px;color:var(--text-muted);">(optional)</span></label>
+            <label>MAC Address <span style="font-size:11px;color:var(--text-muted);">(optional — Network Discovery matches on it)</span></label>
             <input type="text" name="mac" id="edit-mac" maxlength="17" class="mono" style="width:100%;"
                    placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off">
         </div>
-        {% endif %}
 
         <div id="edit-owner-group" class="form-group">
             <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "Lab gear")</span></label>
@@ -246,6 +313,46 @@
             <button type="button" id="edit-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button type="button" id="edit-clear-btn" class="btn btn-secondary"
                     style="margin-left:auto;color:var(--danger);">Clear all notes</button>
+        </div>
+    </form>
+
+    <div id="edit-history" style="margin-top:16px;font-size:12px;color:var(--text-muted);"></div>
+</div>
+</div>
+
+<!-- Range Modal -->
+<div id="range-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
+            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">⇔ Mark a range</h3>
+        <button id="range-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <form method="POST" action="{{ url_for('ipam.range_action', kind=kind, subnet_id=subnet_id) }}" id="range-form"
+          data-confirm="Apply this to every address in the range? Existing labels in the range are replaced.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group"><label>From</label><input type="text" name="first" class="mono" placeholder="10.0.0.20" required></div>
+            <div class="form-group"><label>To</label><input type="text" name="last" class="mono" placeholder="10.0.0.40" required></div>
+        </div>
+        <div class="form-group">
+            <label>Action</label>
+            <select name="action" style="width:100%;">
+                <option value="planned">◔ Mark Planned</option>
+                <option value="static">● Mark Static</option>
+                <option value="clear">○ Clear every entry in the range</option>
+            </select>
+            <div class="form-hint">Up to 1024 addresses per action. Addresses with a Kea lease or reservation are left alone. One history row per address.</div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Label</label><input type="text" name="label" maxlength="100" placeholder="e.g. Cameras"></div>
+            <div class="form-group"><label>Owner</label><input type="text" name="owner" maxlength="100"></div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Apply</button>
+            <button type="button" id="range-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
     </form>
 </div>
@@ -310,16 +417,15 @@
 
 <script nonce="{{ csp_nonce }}">
 var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
+var HISTORY_URL = {{ url_for('ipam.history', kind=kind, subnet_id=subnet_id)|tojson }};
+var OPEN_IP = {{ (open_ip or '')|tojson }};
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 // v1.3.3: multi-select status filtering. _currentFilter is a Set —
 // "All" is a distinct clear-everything action (deselects every other
-// filter and selects nothing but itself), while Available/Dynamic/
-// Reserved/Static each toggle independently and can be combined, e.g.
-// Reserved + Static shown together, Available + Dynamic excluded.
-// An empty set (the last active toggle just got clicked off) falls
-// back to "all" automatically, rather than showing zero rows with no
-// obvious way to recover other than remembering to click "All".
+// filter and selects nothing but itself), while the status filters each
+// toggle independently and can be combined. An empty set falls back to
+// "all" automatically.
 var _currentFilter = new Set(['all']);
 
 function filterTable() {
@@ -344,7 +450,7 @@ function filterTable() {
     var total = rows.length;
     if (q || !_currentFilter.has('all')) {
         rc.style.display = '';
-        rc.textContent = visible + ' of ' + total + ' addresses shown';
+        rc.textContent = visible + ' of ' + total + ' rows shown';
     } else {
         rc.style.display = 'none';
     }
@@ -373,8 +479,6 @@ function toggleFilter(f) {
     } else {
         _currentFilter.add(f);
     }
-    // Nothing left selected — fall back to "all" rather than a
-    // confusing empty table with no obvious way back.
     if (_currentFilter.size === 0) {
         _currentFilter.add('all');
     }
@@ -402,6 +506,31 @@ document.getElementById('filter-tabs').addEventListener('click', function(e) {
 });
 
 // ── Edit modal ────────────────────────────────────────────────────────────────
+function _escape(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+}
+
+function loadHistory(ip) {
+    var box = document.getElementById('edit-history');
+    box.textContent = 'Loading history…';
+    fetch(HISTORY_URL + '?ip=' + encodeURIComponent(ip), {cache: 'no-store'})
+        .then(function(r) { return r.ok ? r.json() : {rows: []}; })
+        .catch(function() { return {rows: []}; })
+        .then(function(d) {
+            var rows = (d && d.rows) || [];
+            if (!rows.length) { box.textContent = 'No history for this address yet.'; return; }
+            var html = '<div style="font-weight:600;margin-bottom:4px;">🕘 History</div>';
+            rows.forEach(function(h) {
+                html += '<div><span class="mono">' + _escape(h.acted_at) + '</span> · ' + _escape(h.action) +
+                        (h.label ? ' · ' + _escape(h.label) : '') + (h.owner ? ' · ' + _escape(h.owner) : '') +
+                        ' · ' + _escape(h.acted_by) + '</div>';
+            });
+            box.innerHTML = html;
+        });
+}
+
 function openEditModal(btn) {
     var e = JSON.parse(btn.dataset.entry);
 
@@ -414,39 +543,45 @@ function openEditModal(btn) {
         dynamic:   '● Dynamic lease',
         reserved:  '● Kea reservation',
         static:    '● Static',
-        planned:   '◔ Planned'
+        planned:   '◔ Planned',
+        infrastructure: '◆ ' + (e.label || 'Infrastructure') + ' — from the subnet configuration',
+        conflict:  '⚠ Conflict — designated ' + e.designated + ', but a DHCP client holds this address'
     };
     document.getElementById('edit-status-label').textContent = statusLabels[e.status] || e.status;
 
-    document.getElementById('edit-label').value = e.label || '';
-    document.getElementById('edit-owner').value = e.owner || '';
+    var ownDesignation = (e.status === 'static' || e.status === 'planned' || e.status === 'conflict') ? e.designated : 'available';
+    document.getElementById('edit-label').value = (e.status === 'infrastructure' && !e.notes && !e.owner) ? '' : (e.label || '');
+    document.getElementById('edit-owner').value = e.owner || ((e.device && e.device.owner) || '');
     document.getElementById('edit-notes').value = e.notes || '';
-    document.getElementById('edit-ipam-status').value =
-        (e.status === 'static' || e.status === 'planned') ? e.status : 'available';
-
-    // Reset the auto-status-switch tracking for this modal session — see
-    // _onEditFieldInput below.
+    document.getElementById('edit-ipam-status').value = ownDesignation || 'available';
     _statusManuallySet = false;
 
-    if (UNMANAGED) {
-        document.getElementById('edit-hostname').value = e.hostname || '';
-        document.getElementById('edit-mac').value = e.mac || '';
-    }
-
-    var isDynRes = (e.status === 'dynamic' || e.status === 'reserved');
+    var isKea = (e.status === 'dynamic' || e.status === 'reserved' || e.status === 'conflict');
+    // Kea's hostname/MAC are Kea's; only a manually-recorded pair is editable.
+    document.getElementById('edit-hostname').value = isKea ? '' : (e.hostname || '');
+    document.getElementById('edit-mac').value = isKea ? '' : (e.mac || '');
 
     var keaInfo = document.getElementById('edit-kea-info');
-    keaInfo.style.display = isDynRes && (e.hostname || e.mac) ? '' : 'none';
+    var showInfo = isKea && (e.hostname || e.mac || e.device);
+    keaInfo.style.display = showInfo ? '' : 'none';
     document.getElementById('edit-kea-hostname').textContent = e.hostname ? '🖥 ' + e.hostname : '';
     document.getElementById('edit-kea-mac').textContent = e.mac ? '🔌 ' + e.mac : '';
+    var dev = e.device;
+    document.getElementById('edit-kea-device').textContent = dev
+        ? ((dev.icon || '') + ' ' + (dev.name || '') + (dev.manufacturer ? ' (' + dev.manufacturer + ')' : '') + (dev.owner ? ' · owner ' + dev.owner : ''))
+        : '';
 
+    var isDynRes = (e.status === 'dynamic' || e.status === 'reserved');
     document.getElementById('edit-status-group').style.display = isDynRes ? 'none' : '';
     document.getElementById('edit-label-group').style.display  = isDynRes ? 'none' : '';
     document.getElementById('edit-owner-group').style.display  = isDynRes ? 'none' : '';
+    document.getElementById('edit-hostname-group').style.display = isKea ? 'none' : '';
+    document.getElementById('edit-mac-group').style.display = isKea ? 'none' : '';
 
     document.getElementById('edit-clear-btn').style.display =
-        (e.label || e.owner || e.notes || (UNMANAGED && (e.hostname || e.mac))) ? '' : 'none';
+        (e.designated || e.owner || e.notes || (!isKea && (e.hostname || e.mac)) || (e.status !== 'infrastructure' && e.label)) ? '' : 'none';
 
+    loadHistory(e.ip);
     document.getElementById('edit-modal').style.display = 'flex';
 }
 
@@ -462,18 +597,10 @@ document.getElementById('ipam-table').addEventListener('click', function(e) {
 });
 
 // ── Auto-switch away from "Available" once something is typed ──────────────
-// Typing a label/owner/note/etc into an address that's currently just
-// "Available" almost always means the person is designating it, not
-// leaving it available with a stray annotation — so default that to
-// Static. If they explicitly pick a status themselves (including picking
-// Planned, or picking Available back again), that choice is respected for
-// the rest of this modal session and the auto-switch stops touching it.
 var _statusManuallySet = false;
 
 function _editHasContent() {
-    var ids = ['edit-label', 'edit-owner', 'edit-notes'];
-    if (UNMANAGED) ids = ids.concat(['edit-hostname', 'edit-mac']);
-    return ids.some(function(id) {
+    return ['edit-label', 'edit-owner', 'edit-notes', 'edit-hostname', 'edit-mac'].some(function(id) {
         var el = document.getElementById(id);
         return el && el.value.trim() !== '';
     });
@@ -506,19 +633,19 @@ function clearEntry() {
 
 document.getElementById('edit-clear-btn').addEventListener('click', clearEntry);
 
-// ── Import modal ──────────────────────────────────────────────────────────────
-function openImportModal() {
-    document.getElementById('import-modal').style.display = 'flex';
+// ── Range / Import modals ─────────────────────────────────────────────────────
+function _modal(id, show) {
+    document.getElementById(id).style.display = show ? 'flex' : 'none';
 }
-function closeImportModal() {
-    document.getElementById('import-modal').style.display = 'none';
-}
-document.getElementById('import-modal').addEventListener('click', function(e) {
-    if (e.target === this) closeImportModal();
-});
-document.getElementById('ipam-import-btn').addEventListener('click', openImportModal);
-document.getElementById('import-modal-close-btn').addEventListener('click', closeImportModal);
-document.getElementById('import-modal-cancel-btn').addEventListener('click', closeImportModal);
+document.getElementById('ipam-range-btn').addEventListener('click', function() { _modal('range-modal', true); });
+document.getElementById('range-modal-close-btn').addEventListener('click', function() { _modal('range-modal', false); });
+document.getElementById('range-modal-cancel-btn').addEventListener('click', function() { _modal('range-modal', false); });
+document.getElementById('range-modal').addEventListener('click', function(e) { if (e.target === this) _modal('range-modal', false); });
+
+document.getElementById('ipam-import-btn').addEventListener('click', function() { _modal('import-modal', true); });
+document.getElementById('import-modal-close-btn').addEventListener('click', function() { _modal('import-modal', false); });
+document.getElementById('import-modal-cancel-btn').addEventListener('click', function() { _modal('import-modal', false); });
+document.getElementById('import-modal').addEventListener('click', function(e) { if (e.target === this) _modal('import-modal', false); });
 
 {% if unmanaged and is_admin %}
 function deleteSubnet() {
@@ -535,13 +662,13 @@ document.getElementById('edit-modal').addEventListener('click', function(e) {
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeEditModal();
-        closeImportModal();
+        _modal('range-modal', false);
+        _modal('import-modal', false);
     }
 });
 
 // Apply initial filter state on load — status_filter is always a single
-// value from the URL (?filter=static etc., or "all" by default); the
-// multi-select toggling above only applies to clicks after that.
+// value from the URL (?filter=static etc., or "all" by default).
 {% if status_filter == 'all' %}
 setFilterAll();
 {% else %}
@@ -549,6 +676,14 @@ _currentFilter = new Set(['{{ status_filter }}']);
 _syncFilterButtons();
 filterTable();
 {% endif %}
+
+// v1.5.0 — ?ip=… (Discovery's "Add IPAM entry", the Next-free button)
+// opens the edit modal on that address.
+if (OPEN_IP) {
+    var _row = document.querySelector('#ipam-table tbody tr[data-ip="' + OPEN_IP + '"]');
+    var _btn = _row && _row.querySelector('.ipam-edit-btn');
+    if (_btn) { _row.scrollIntoView({block: 'center'}); openEditModal(_btn); }
+}
 </script>
 
 {% endblock %}

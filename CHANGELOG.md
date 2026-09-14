@@ -1,5 +1,78 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.5.0] - 2026-09-13
+
+### Uses everything Jen already knows about a subnet
+
+IPAM Lite was born out of not wanting to populate Netbox when all the
+information needed is already in Jen — but until now it only used two
+pieces of it (Kea's leases and reservations) and treated everything
+else in a subnet as "available". This release reads the rest, through
+Jen v5.30.0's `subnet_context` (so **Jen 5.30.0 or later is required**):
+
+- **Gateway, DNS servers, the Kea servers' and the Jen host's own
+  addresses, network and broadcast** are a new **Infrastructure**
+  status — labelled for what they are, counted as used, never offered
+  as free. An unmanaged subnet can record its gateway when it's added
+  (a new optional field) for the same effect.
+- **DHCP pools** are shown under the subnet header and every address
+  inside one carries a `pool` badge. That's what makes **✨ Next free**
+  possible: one click finds the first available address *outside*
+  every pool — the thing Netbox was being kept around for — and opens
+  it for editing.
+- **The devices table.** A lease's row now shows the device Jen has
+  seen for that MAC (name, vendor, icon) in its own column, and the
+  edit form prefills Owner from the device's owner.
+- **Subnet notes** from Jen's Subnets page appear under the header.
+
+### Conflicts are conflicts
+
+A `static` or `planned` entry whose address now carries a dynamic
+lease used to be shown as plain "Dynamic" — the lease silently won.
+It's now a **Conflict** (its own red count, filter tab and status),
+showing both the designation and the lease's hostname/MAC, with the
+lease link beside it. The fix is either a reservation for the intended
+device or a corrected entry; IPAM won't guess.
+
+### Big subnets
+
+- The overview no longer builds the full address space of every subnet
+  just to count it (a /16 was 65,534 entries plus two queries per card
+  on every load): counts come from set arithmetic over the lease,
+  reservation and entry sets.
+- The detail page collapses runs of four or more consecutive available
+  addresses into one row (`10.0.0.20 – 10.0.0.199 · 180 available`),
+  split at pool boundaries; click a run to expand it, or "show every
+  address". Subnets up to a /22 still list everything.
+
+### Range operations, history, and the rest
+
+- **Range…** marks a from–to span Planned or Static with one label and
+  owner, or clears it — up to 1024 addresses per action, never touching
+  an address with a Kea lease or reservation, one history row each.
+- **History is finally visible**: the last changes to an address in
+  its edit modal, a "Recent changes" panel on the subnet page, and a
+  history CSV. Migration 14 indexes the history table for it.
+- Manual **hostname and MAC are allowed on Kea-subnet entries** too (the
+  columns always existed; only unmanaged subnets could use them) — a
+  genuinely static host has a MAC the operator knows, and Network
+  Discovery v1.1.0 matches on it.
+- `?ip=` on a subnet page opens that address for editing (Network
+  Discovery's "Add IPAM entry" link uses it).
+- **Netbox-shaped export** (`address, status, dns_name, description,
+  tenant`) beside the Jen CSV, for anyone keeping both.
+- Every CSV cell goes through Jen's formula-injection guard (a cell
+  starting with `=`, `+`, `-`, `@` is quoted); a local copy of the rule
+  applies on older Jens.
+
+### Housekeeping
+
+- `tools/test_plugin.py`: the plugin's own unit checks (space
+  composition, counting, run collapsing, next-free, ranges, import
+  parsing) run in CI after `verify.py`, with no Jen or database needed.
+- Migrations 14 (history index) and 15 (`ipam_subnets.gateway`) are
+  plain portable DDL like the rest.
+
 ## [1.4.6] - 2026-09-13
 
 ### Housekeeping: the IPv4-only note, back from the bundled copy

@@ -75,6 +75,16 @@
         <span style="color:var(--text-muted);">
             <span style="color:#8b5cf6;">●</span> {{ s.planned }} planned
         </span>
+        {% if s.get('infrastructure') %}
+        <span style="color:var(--text-muted);">
+            <span style="color:var(--text-muted);">◆</span> {{ s.infrastructure }} infrastructure
+        </span>
+        {% endif %}
+        {% if s.get('conflict') %}
+        <span style="color:var(--danger);font-weight:600;">
+            ⚠ {{ s.conflict }} conflict{{ 's' if s.conflict != 1 else '' }}
+        </span>
+        {% endif %}
     </div>
     {% else %}
     <div style="font-size:12px;color:var(--text-muted);">No data</div>
@@ -104,6 +114,8 @@
     &nbsp;·&nbsp;<span style="color:var(--success);">● Reserved</span> — Kea reservation
     &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually designated in IPAM
     &nbsp;·&nbsp;<span style="color:#8b5cf6;">● Planned</span> — earmarked for future use, not yet a reservation
+    &nbsp;·&nbsp;<span style="color:var(--text-muted);">◆ Infrastructure</span> — gateway, DNS, the Kea and Jen hosts, network/broadcast (from the subnet's own configuration)
+    &nbsp;·&nbsp;<span style="color:var(--danger);">⚠ Conflict</span> — designated static/planned here, but a DHCP client currently holds it
     &nbsp;·&nbsp;Available — no lease, reservation, or designation
     &nbsp;·&nbsp;<strong style="color:var(--text);">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
 </div>
@@ -134,8 +146,12 @@
                    placeholder="e.g. 172.16.10.0/24" required autocomplete="off">
             <div class="form-hint">
                 Must not overlap any Kea-managed or existing unmanaged subnet.
-                Maximum size /16; anything larger than a /22 renders a very large table.
+                Maximum size /16; larger than a /22, the detail page collapses runs of available addresses into one row.
             </div>
+        </div>
+        <div class="form-group">
+            <label>Gateway <span style="font-size:11px;color:var(--text-muted);">(optional — shown as infrastructure, never "available")</span></label>
+            <input type="text" name="gateway" style="width:100%;" class="mono" placeholder="e.g. 172.16.10.1" autocomplete="off">
         </div>
         <div class="form-group">
             <label>Description <span style="font-size:11px;color:var(--text-muted);">(optional)</span></label>

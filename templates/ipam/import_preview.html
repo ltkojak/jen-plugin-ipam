@@ -37,7 +37,7 @@
         <th>IP Address</th>
         <th>Status</th>
         <th>Label / Hostname</th>
-        {% if unmanaged %}<th>MAC Address</th>{% endif %}
+        <th>MAC Address</th>
         <th>Owner</th>
         <th>Notes</th>
     </tr></thead>
@@ -51,7 +51,7 @@
             {% else %}<span style="color:var(--text-muted);">○ Available</span>{% endif %}
         </td>
         <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
-        {% if unmanaged %}<td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>{% endif %}
+        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>
         <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or '—' }}</td>
         <td style="font-size:12px;color:var(--text-muted);max-width:220px;overflow:hidden;
                    text-overflow:ellipsis;white-space:nowrap;">{{ entry.notes or '—' }}</td>

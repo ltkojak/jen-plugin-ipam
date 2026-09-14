@@ -2,6 +2,18 @@
 IPAM Lite plugin for Jen.
 Full IP address space management for Kea-managed and unmanaged subnets.
 Version lives in manifest.json — not duplicated here.
+
+v1.5.0 — the "Jen already knows this" release. Everything Jen holds
+about a subnet is used before an address is called available or a
+count is made: the gateway, DNS servers, pools, the Kea servers' and
+Jen host's own addresses (Jen's `subnet_context`, v5.30.0), the
+`devices` table (a device's name/owner/vendor beside its lease), and
+the plugin's own entries — so an address inside a DHCP pool is marked
+as such, infrastructure addresses are labelled instead of "available",
+a static entry whose IP now carries a dynamic lease is a *conflict*,
+and "next free outside the pools" is one click. Overview counts no
+longer enumerate every host address of every subnet, and the detail
+page collapses long runs of available addresses into one row.
 """
 
 import csv
@@ -12,7 +24,7 @@ import logging
 import os as _os
 import re
 
-from flask import Blueprint, flash, make_response, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, make_response, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
@@ -33,8 +45,18 @@ _FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Hard cap on unmanaged subnet size: nothing larger than a /16.
 _MAX_PREFIX = 16
-# Soft warning threshold: larger than a /22 renders thousands of table rows.
-_WARN_PREFIX = 22
+# Above this size the detail page collapses runs of available addresses
+# by default (a /22 is 1,022 rows; a /16 is 65,534).
+_COLLAPSE_PREFIX = 22
+# A run of at least this many consecutive available addresses becomes one
+# row on the detail page.
+_MIN_RUN = 4
+# Range operations (mark/clear a from–to span) are capped per action.
+_RANGE_MAX = 1024
+
+# Statuses. 'infrastructure' and 'conflict' are derived (never stored).
+_DESIGNATED = ("static", "planned")
+_ALL_STATUSES = ("available", "dynamic", "reserved", "static", "planned", "infrastructure", "conflict")
 
 # ── Import ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +74,15 @@ _NETBOX_STATUS_MAP = {
     "deprecated": "static",
     "dhcp": None,
     "slaac": None,
+}
+# The inverse, for the Netbox-shaped export.
+_NETBOX_EXPORT_STATUS = {
+    "static": "active",
+    "planned": "reserved",
+    "reserved": "active",
+    "dynamic": "dhcp",
+    "infrastructure": "active",
+    "conflict": "active",
 }
 
 # Column-name aliases used to sniff a generic/unknown CSV export.
@@ -115,6 +146,21 @@ def _audit(action, target, detail):
         logger.error(f"IPAM: audit failed: {e}")
 
 
+def _safe_row(values):
+    """Jen's CSV formula-injection guard (v5.30.0); a local copy of the
+    same rule when running against an older Jen."""
+    try:
+        from jen.services.csv_safe import safe_row
+
+        return safe_row(values)
+    except Exception:
+        out = []
+        for v in values:
+            s = "" if v is None else str(v)
+            out.append(f"'{s}" if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s)
+        return out
+
+
 def _normalize_mac(raw):
     """Normalize a user-entered MAC to lowercase colon format, or '' / None on failure."""
     if not raw:
@@ -140,17 +186,18 @@ def _format_identifier(hex_str, ident_type):
 
 
 def _get_ipam_subnets():
-    """Return {id: {name, cidr, description}} for all unmanaged subnets."""
+    """Return {id: {name, cidr, description, gateway}} for all unmanaged subnets."""
     subnets = {}
     db = _jen_db()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT id, name, cidr, description FROM ipam_subnets ORDER BY cidr")
+            cur.execute("SELECT id, name, cidr, description, gateway FROM ipam_subnets ORDER BY cidr")
             for row in cur.fetchall():
                 subnets[row["id"]] = {
                     "name": row["name"],
                     "cidr": row["cidr"],
                     "description": row["description"] or "",
+                    "gateway": row.get("gateway") or "",
                 }
     finally:
         db.close()
@@ -164,77 +211,159 @@ def _get_subnet(kind, subnet_id):
     return _get_ipam_subnets().get(subnet_id)
 
 
-# ── Address space ─────────────────────────────────────────────────────────────
+# ── What Jen already knows about a subnet ─────────────────────────────────────
 
 
-def _build_address_space(kind, subnet_id, cidr):
-    """
-    Build the full address space for a subnet.
-    Each entry: {ip, status, hostname, mac, label, owner, notes, host_id}
-    Status: 'available' | 'dynamic' | 'reserved' | 'static' | 'planned'
-    For unmanaged (kind='u') subnets Kea is never queried; only
-    'available' and 'static' occur, and hostname/mac come from the entry.
-    """
+def _bare_ctx(cidr, gateway=""):
+    """The context for a subnet Jen holds no Kea config for (an unmanaged
+    subnet, or a Jen older than 5.30.0): network/broadcast, an optional
+    operator-recorded gateway, no pools."""
+    infra = {}
     try:
         network = ipaddress.IPv4Network(cidr, strict=False)
     except ValueError:
-        return []
+        return {"gateways": [], "dns": [], "pools": [], "infrastructure": {}, "notes": ""}
+    if network.prefixlen < 31:
+        infra[str(network.network_address)] = "network"
+        infra[str(network.broadcast_address)] = "broadcast"
+    gateways = []
+    if gateway:
+        try:
+            if ipaddress.IPv4Address(gateway) in network:
+                gateways = [gateway]
+                infra.setdefault(gateway, "gateway")
+        except ValueError:
+            pass
+    return {"gateways": gateways, "dns": [], "pools": [], "infrastructure": infra, "notes": ""}
 
-    all_ips = [str(h) for h in network.hosts()]
-    db_kind = _KIND_DB[kind]
 
+def _subnet_ctx(kind, subnet_id, subnet):
+    """Jen's subnet_context() for a Kea subnet (gateway, DNS, pools, the
+    Kea servers' and Jen host's addresses, notes), else the bare one."""
+    if kind == "kea":
+        try:
+            from jen.services.subnet_context import subnet_context
+
+            ctx = subnet_context(subnet_id)
+            if ctx:
+                return ctx
+        except Exception as e:
+            logger.warning(f"IPAM: subnet_context unavailable for {subnet_id}: {e}")
+        return _bare_ctx(subnet["cidr"])
+    return _bare_ctx(subnet["cidr"], subnet.get("gateway", ""))
+
+
+def _in_pool(ctx, ip):
+    try:
+        n = int(ipaddress.IPv4Address(ip))
+    except ValueError:
+        return False
+    return any(first <= n <= last for first, last, _t in ctx.get("pools", []))
+
+
+_INFRA_LABELS = {
+    "gateway": "Gateway",
+    "dns": "DNS server",
+    "kea-server": "Kea server",
+    "jen-host": "Jen host",
+    "network": "Network",
+    "broadcast": "Broadcast",
+}
+
+
+def _devices_by_mac(macs):
+    """{mac: {name, owner, manufacturer, device_type, icon}} from Jen's
+    devices table for the given MACs. Best effort — {} on any failure."""
+    macs = [m for m in macs if m and not m.startswith("id:")]
+    if not macs:
+        return {}
+    out = {}
+    db = None
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            # One fixed statement per MAC (never a runtime-built IN list —
+            # Jen's bandit gate scans the bundled copy).
+            for mac in macs:
+                cur.execute(
+                    "SELECT mac, device_name, owner, manufacturer, manufacturer_override, device_type, "
+                    "device_type_override, device_icon, device_icon_override FROM devices WHERE mac=%s",
+                    (mac,),
+                )
+                row = cur.fetchone()
+                if row:
+                    out[mac] = {
+                        "name": row.get("device_name") or "",
+                        "owner": row.get("owner") or "",
+                        "manufacturer": row.get("manufacturer_override") or row.get("manufacturer") or "",
+                        "device_type": row.get("device_type_override") or row.get("device_type") or "",
+                        "icon": row.get("device_icon_override") or row.get("device_icon") or "",
+                    }
+    except Exception as e:
+        logger.warning(f"IPAM: devices lookup failed: {e}")
+    finally:
+        if db:
+            db.close()
+    return out
+
+
+# ── Address space ─────────────────────────────────────────────────────────────
+
+
+def _load_kea_sets(subnet_id):
+    """(active_leases {ip: {hostname, mac}}, reservations {ip: {hostname, mac, host_id}})."""
     active_leases = {}
     reservations = {}
+    db = None
+    try:
+        db = _kea_db()
+        with db.cursor() as cur:
+            cur.execute(
+                """
+                SELECT inet_ntoa(l.address) AS ip,
+                       l.hostname,
+                       HEX(l.hwaddr) AS mac_hex
+                FROM lease4 l
+                WHERE l.state=0 AND l.subnet_id=%s
+            """,
+                (subnet_id,),
+            )
+            for row in cur.fetchall():
+                if not row["ip"]:
+                    continue
+                active_leases[row["ip"]] = {
+                    "hostname": row["hostname"] or "",
+                    "mac": _format_identifier(row["mac_hex"], 0),
+                }
+            cur.execute(
+                """
+                SELECT inet_ntoa(h.ipv4_address) AS ip,
+                       h.hostname,
+                       HEX(h.dhcp_identifier) AS ident_hex,
+                       h.dhcp_identifier_type AS ident_type,
+                       h.host_id
+                FROM hosts h
+                WHERE h.dhcp4_subnet_id=%s
+                  AND h.ipv4_address IS NOT NULL
+                  AND h.ipv4_address > 0
+            """,
+                (subnet_id,),
+            )
+            for row in cur.fetchall():
+                reservations[row["ip"]] = {
+                    "hostname": row["hostname"] or "",
+                    "mac": _format_identifier(row["ident_hex"], row["ident_type"]),
+                    "host_id": row["host_id"],
+                }
+    except Exception as e:
+        logger.error(f"IPAM: Kea DB error for subnet {subnet_id}: {e}")
+    finally:
+        if db:
+            db.close()
+    return active_leases, reservations
 
-    if kind == "kea":
-        db = None
-        try:
-            db = _kea_db()
-            with db.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT inet_ntoa(l.address) AS ip,
-                           l.hostname,
-                           HEX(l.hwaddr) AS mac_hex
-                    FROM lease4 l
-                    WHERE l.state=0 AND l.subnet_id=%s
-                """,
-                    (subnet_id,),
-                )
-                for row in cur.fetchall():
-                    if not row["ip"]:
-                        continue
-                    active_leases[row["ip"]] = {
-                        "hostname": row["hostname"] or "",
-                        "mac": _format_identifier(row["mac_hex"], 0),
-                    }
-                cur.execute(
-                    """
-                    SELECT inet_ntoa(h.ipv4_address) AS ip,
-                           h.hostname,
-                           HEX(h.dhcp_identifier) AS ident_hex,
-                           h.dhcp_identifier_type AS ident_type,
-                           h.host_id
-                    FROM hosts h
-                    WHERE h.dhcp4_subnet_id=%s
-                      AND h.ipv4_address IS NOT NULL
-                      AND h.ipv4_address > 0
-                """,
-                    (subnet_id,),
-                )
-                for row in cur.fetchall():
-                    reservations[row["ip"]] = {
-                        "hostname": row["hostname"] or "",
-                        "mac": _format_identifier(row["ident_hex"], row["ident_type"]),
-                        "host_id": row["host_id"],
-                    }
-        except Exception as e:
-            logger.error(f"IPAM: Kea DB error for subnet {subnet_id}: {e}")
-        finally:
-            if db:
-                db.close()
 
-    # IPAM entries
+def _load_entries(db_kind, subnet_id):
     ipam_entries = {}
     db = None
     try:
@@ -255,7 +384,20 @@ def _build_address_space(kind, subnet_id, cidr):
     finally:
         if db:
             db.close()
+    return ipam_entries
 
+
+def _designated_status(entry_row):
+    s = entry_row.get("entry_status") or ("static" if entry_row.get("is_static") else "available")
+    return s if s in _DESIGNATED else "available"
+
+
+def _compose_space(all_ips, active_leases, reservations, ipam_entries, ctx, devices=None):
+    """Pure: the per-address entries. Precedence: reservation > lease
+    (a designated entry under a lease is a *conflict*, not silently
+    'dynamic') > infrastructure > static/planned > available."""
+    devices = devices or {}
+    infra = ctx.get("infrastructure", {})
     space = []
     for ip in all_ips:
         entry = {
@@ -267,45 +409,172 @@ def _build_address_space(kind, subnet_id, cidr):
             "notes": "",
             "host_id": None,
             "status": "available",
+            "designated": "",
+            "infra": "",
+            "in_pool": _in_pool(ctx, ip),
+            "device": None,
         }
+        s = ipam_entries.get(ip)
+        if s:
+            entry["label"] = s.get("label") or ""
+            entry["owner"] = s.get("owner") or ""
+            entry["notes"] = s.get("notes") or ""
+            entry["hostname"] = s.get("hostname") or ""
+            entry["mac"] = s.get("mac") or ""
+            entry["designated"] = _designated_status(s)
 
         if ip in reservations:
-            entry.update(reservations[ip])
+            r = reservations[ip]
             entry["status"] = "reserved"
+            entry["host_id"] = r["host_id"]
+            entry["hostname"] = r["hostname"] or entry["hostname"]
+            entry["mac"] = r["mac"] or entry["mac"]
             if ip in active_leases:
                 entry["hostname"] = entry["hostname"] or active_leases[ip]["hostname"]
                 entry["mac"] = entry["mac"] or active_leases[ip]["mac"]
         elif ip in active_leases:
-            entry.update(active_leases[ip])
-            entry["status"] = "dynamic"
+            lease = active_leases[ip]
+            # v1.5.0 — a designated static/planned address that a DHCP client
+            # is now using is a conflict, not a lease that "wins".
+            entry["status"] = "conflict" if entry["designated"] in _DESIGNATED else "dynamic"
+            entry["hostname"] = lease["hostname"] or entry["hostname"]
+            entry["mac"] = lease["mac"] or entry["mac"]
+        elif ip in infra:
+            entry["status"] = "infrastructure"
+            entry["infra"] = infra[ip]
+            if not entry["label"]:
+                entry["label"] = _INFRA_LABELS.get(infra[ip], infra[ip])
+        elif entry["designated"] in _DESIGNATED:
+            entry["status"] = entry["designated"]
 
-        if ip in ipam_entries:
-            s = ipam_entries[ip]
-            entry["label"] = s.get("label") or ""
-            entry["owner"] = s.get("owner") or ""
-            entry["notes"] = s.get("notes") or ""
-            if kind == "u":
-                entry["hostname"] = s.get("hostname") or ""
-                entry["mac"] = s.get("mac") or ""
-            # Only an explicit designation flips the status away from
-            # whatever Kea already told us (dynamic/reserved always win).
-            if entry["status"] == "available":
-                designated = s.get("entry_status") or ("static" if s.get("is_static") else "available")
-                if designated in ("static", "planned"):
-                    entry["status"] = designated
-
+        if entry["mac"] and entry["mac"] in devices:
+            entry["device"] = devices[entry["mac"]]
         space.append(entry)
-
     return space
 
 
+def _build_address_space(kind, subnet_id, cidr, ctx=None, subnet=None):
+    """Every host address of the subnet, with status, annotations, pool
+    membership, infrastructure label and (Kea subnets) the device Jen
+    knows for the MAC."""
+    try:
+        network = ipaddress.IPv4Network(cidr, strict=False)
+    except ValueError:
+        return []
+    all_ips = [str(h) for h in network.hosts()]
+    db_kind = _KIND_DB[kind]
+    if ctx is None:
+        ctx = _subnet_ctx(kind, subnet_id, subnet or {"cidr": cidr})
+    active_leases, reservations = _load_kea_sets(subnet_id) if kind == "kea" else ({}, {})
+    ipam_entries = _load_entries(db_kind, subnet_id)
+    devices = {}
+    if kind == "kea":
+        macs = {v["mac"] for v in active_leases.values()} | {v["mac"] for v in reservations.values()}
+        devices = _devices_by_mac(sorted(m for m in macs if m))
+    return _compose_space(all_ips, active_leases, reservations, ipam_entries, ctx, devices)
+
+
+def _count_sets(total_hosts, host_ips_in, active_leases, reservations, ipam_entries, ctx):
+    """Pure set arithmetic — the overview never enumerates the address
+    space (v1.5.0; the old count built every host of every subnet)."""
+    res = set(reservations)
+    leases = set(active_leases)
+    designated = {ip for ip, r in ipam_entries.items() if _designated_status(r) in _DESIGNATED}
+    infra = {ip for ip in ctx.get("infrastructure", {}) if host_ips_in(ip)}
+    dynamic = leases - res
+    conflict = dynamic & designated
+    dynamic -= conflict
+    infra -= res | leases
+    static = {ip for ip in designated - res - leases - infra if _designated_status(ipam_entries[ip]) == "static"}
+    planned = {ip for ip in designated - res - leases - infra if _designated_status(ipam_entries[ip]) == "planned"}
+    counts = {
+        "total": total_hosts,
+        "reserved": len(res),
+        "dynamic": len(dynamic),
+        "conflict": len(conflict),
+        "infrastructure": len(infra),
+        "static": len(static),
+        "planned": len(planned),
+    }
+    counts["used"] = sum(counts[k] for k in ("reserved", "dynamic", "conflict", "infrastructure", "static", "planned"))
+    counts["available"] = max(total_hosts - counts["used"], 0)
+    counts["pct"] = round(counts["used"] / total_hosts * 100) if total_hosts else 0
+    return counts
+
+
 def _count_space(space):
-    counts = {"available": 0, "dynamic": 0, "reserved": 0, "static": 0, "planned": 0, "total": len(space)}
+    """Counts from an already-built space (the detail page)."""
+    counts = dict.fromkeys(_ALL_STATUSES, 0)
+    counts["total"] = len(space)
     for e in space:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
-    counts["used"] = counts["dynamic"] + counts["reserved"] + counts["static"] + counts["planned"]
+    counts["used"] = counts["total"] - counts["available"]
     counts["pct"] = round(counts["used"] / counts["total"] * 100) if counts["total"] else 0
     return counts
+
+
+def _summary(kind, subnet_id, subnet):
+    """Overview card numbers without building the space."""
+    network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    total = max(network.num_addresses - (2 if network.prefixlen < 31 else 0), 0)
+    ctx = _subnet_ctx(kind, subnet_id, subnet)
+    leases, res = _load_kea_sets(subnet_id) if kind == "kea" else ({}, {})
+    entries = _load_entries(_KIND_DB[kind], subnet_id)
+
+    def host_in(ip):
+        try:
+            a = ipaddress.IPv4Address(ip)
+        except ValueError:
+            return False
+        return a in network and a not in (network.network_address, network.broadcast_address)
+
+    return _count_sets(total, host_in, leases, res, entries, ctx)
+
+
+def _collapse_runs(space, collapse, expand=None, min_run=_MIN_RUN):
+    """Pure: table rows for the detail page. With `collapse`, a run of
+    ≥ min_run consecutive available addresses becomes one row
+    {"run": True, "first", "last", "count", "in_pool"}; `expand` is a
+    "first-last" text naming one run to show in full."""
+    if not collapse:
+        return list(space)
+    rows = []
+    i, n = 0, len(space)
+    while i < n:
+        e = space[i]
+        if e["status"] != "available":
+            rows.append(e)
+            i += 1
+            continue
+        j = i
+        while j < n and space[j]["status"] == "available" and space[j]["in_pool"] == e["in_pool"]:
+            j += 1
+        run = space[i:j]
+        key = f"{run[0]['ip']}-{run[-1]['ip']}"
+        if len(run) >= min_run and expand != key:
+            rows.append(
+                {
+                    "run": True,
+                    "first": run[0]["ip"],
+                    "last": run[-1]["ip"],
+                    "count": len(run),
+                    "in_pool": e["in_pool"],
+                    "key": key,
+                }
+            )
+        else:
+            rows.extend(run)
+        i = j
+    return rows
+
+
+def _next_free(space):
+    """The first available address outside every pool — what Netbox was
+    being used for. None when there isn't one."""
+    for e in space:
+        if e["status"] == "available" and not e["in_pool"]:
+            return e["ip"]
+    return None
 
 
 def _can_see_unmanaged():
@@ -326,6 +595,57 @@ def _check_access(kind, subnet_id):
         flash("You do not have access to unmanaged subnets.", "error")
         return None
     return _get_subnet(kind, subnet_id)
+
+
+# ── History ───────────────────────────────────────────────────────────────────
+
+
+def _record_history(cur, ip, db_kind, subnet_id, action, label="", owner=""):
+    cur.execute(
+        """
+        INSERT INTO ipam_assignment_history
+            (ip, subnet_kind, subnet_id, label, owner, action, acted_at, acted_by)
+        VALUES (%s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), %s)
+    """,
+        (ip, db_kind, subnet_id, label, owner, action, current_user.username),
+    )
+
+
+def _history_rows(db_kind, subnet_id, ip=None, limit=25):
+    db = None
+    rows = []
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            if ip:
+                cur.execute(
+                    "SELECT ip, label, owner, action, acted_at, acted_by FROM ipam_assignment_history "
+                    "WHERE subnet_kind=%s AND subnet_id=%s AND ip=%s ORDER BY acted_at DESC, id DESC LIMIT %s",
+                    (db_kind, subnet_id, ip, int(limit)),
+                )
+            else:
+                cur.execute(
+                    "SELECT ip, label, owner, action, acted_at, acted_by FROM ipam_assignment_history "
+                    "WHERE subnet_kind=%s AND subnet_id=%s ORDER BY acted_at DESC, id DESC LIMIT %s",
+                    (db_kind, subnet_id, int(limit)),
+                )
+            for r in cur.fetchall():
+                rows.append(
+                    {
+                        "ip": r["ip"],
+                        "label": r.get("label") or "",
+                        "owner": r.get("owner") or "",
+                        "action": r.get("action") or "",
+                        "acted_at": r["acted_at"].strftime("%Y-%m-%d %H:%M") if r.get("acted_at") else "",
+                        "acted_by": r.get("acted_by") or "",
+                    }
+                )
+    except Exception as e:
+        logger.error(f"IPAM: history error for {db_kind}/{subnet_id}: {e}")
+    finally:
+        if db:
+            db.close()
+    return rows
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
@@ -391,11 +711,11 @@ def _parse_import_rows(rows, fieldnames, fmt):
             if not ip:
                 continue
             status = _norm_header(r.get(status_col) if status_col else "")
-            if status in ("dynamic", "reserved"):
-                # Kea-derived state, not a manual IPAM entry — importing it
-                # back would just create a redundant static-looking row.
+            if status in ("dynamic", "reserved", "infrastructure", "conflict"):
+                # Kea-derived or derived state, not a manual IPAM entry —
+                # importing it back would just create a redundant row.
                 continue
-            if status not in ("static", "planned"):
+            if status not in _DESIGNATED:
                 status = "available"
             parsed.append(
                 {
@@ -496,13 +816,13 @@ def index():
     summaries = {}
     for sid, info in subnet_map.items():
         try:
-            summaries[("kea", sid)] = _count_space(_build_address_space("kea", sid, info["cidr"]))
+            summaries[("kea", sid)] = _summary("kea", sid, info)
         except Exception as e:
             logger.error(f"IPAM: summary failed for kea subnet {sid}: {e}")
             summaries[("kea", sid)] = {}
     for sid, info in ipam_subnets.items():
         try:
-            summaries[("u", sid)] = _count_space(_build_address_space("u", sid, info["cidr"]))
+            summaries[("u", sid)] = _summary("u", sid, info)
         except Exception as e:
             logger.error(f"IPAM: summary failed for unmanaged subnet {sid}: {e}")
             summaries[("u", sid)] = {}
@@ -515,6 +835,22 @@ def index():
 # ── Routes: subnet detail / export ────────────────────────────────────────────
 
 
+def _parse_expand(raw, network):
+    """`?expand=first-last` → the same text, only if both ends are inside
+    the subnet (anything else is ignored, never echoed)."""
+    raw = (raw or "").strip()
+    if not raw or "-" not in raw:
+        return None
+    a, _, b = raw.partition("-")
+    try:
+        fa, fb = ipaddress.IPv4Address(a.strip()), ipaddress.IPv4Address(b.strip())
+    except ValueError:
+        return None
+    if fa in network and fb in network and fa <= fb:
+        return f"{fa}-{fb}"
+    return None
+
+
 @bp.route("/subnet/<kind>/<int:subnet_id>")
 @login_required
 def subnet_detail(kind, subnet_id):
@@ -523,11 +859,30 @@ def subnet_detail(kind, subnet_id):
         flash("Subnet not found or access denied.", "error")
         return redirect(url_for("ipam.index"))
 
-    space = _build_address_space(kind, subnet_id, subnet["cidr"])
+    network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    ctx = _subnet_ctx(kind, subnet_id, subnet)
+    space = _build_address_space(kind, subnet_id, subnet["cidr"], ctx=ctx, subnet=subnet)
     counts = _count_space(space)
     status_filter = request.args.get("filter", "all")
-    if status_filter not in ("all", "available", "dynamic", "reserved", "static", "planned"):
+    if status_filter not in ("all", *_ALL_STATUSES):
         status_filter = "all"
+
+    # v1.5.0 — an address to open the edit modal on (Discovery's "Add IPAM
+    # entry" link, or "Next free"): if it sits inside a collapsed run,
+    # that run is expanded so the row exists.
+    open_ip = _extract_ip(request.args.get("ip", ""))
+    if open_ip and ipaddress.IPv4Address(open_ip) not in network:
+        open_ip = None
+    collapse = request.args.get("all") != "1" and network.prefixlen <= _COLLAPSE_PREFIX
+    expand = _parse_expand(request.args.get("expand", ""), network)
+    rows = _collapse_runs(space, collapse, expand)
+    if open_ip and not any(not r.get("run") and r["ip"] == open_ip for r in rows):
+        for r in rows:
+            if r.get("run") and int(ipaddress.IPv4Address(r["first"])) <= int(ipaddress.IPv4Address(open_ip)) <= int(
+                ipaddress.IPv4Address(r["last"])
+            ):
+                rows = _collapse_runs(space, collapse, r["key"])
+                break
 
     return render_template(
         "ipam/subnet.html",
@@ -535,8 +890,15 @@ def subnet_detail(kind, subnet_id):
         subnet_id=subnet_id,
         subnet=subnet,
         space=space,
+        rows=rows,
+        collapsed=collapse,
         counts=counts,
+        ctx=ctx,
+        pool_texts=[t for _f, _l, t in ctx.get("pools", [])],
+        next_free=_next_free(space),
+        recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
+        open_ip=open_ip,
         is_admin=_is_admin(),
     )
 
@@ -556,19 +918,88 @@ def export_csv(kind, subnet_id):
         flash("Subnet not found or access denied.", "error")
         return redirect(url_for("ipam.index"))
 
-    space = _build_address_space(kind, subnet_id, subnet["cidr"])
+    fmt = request.args.get("format", "jen")
+    space = _build_address_space(kind, subnet_id, subnet["cidr"], subnet=subnet)
+    prefixlen = ipaddress.IPv4Network(subnet["cidr"], strict=False).prefixlen
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["ip", "status", "hostname", "mac", "label", "owner", "notes"])
-    writer.writeheader()
-    for entry in space:
-        writer.writerow({k: entry.get(k, "") for k in writer.fieldnames})
+    if fmt == "netbox":
+        # Netbox's IP Addresses import columns — for anyone keeping both.
+        writer = csv.writer(output)
+        writer.writerow(["address", "status", "dns_name", "description", "tenant"])
+        for entry in space:
+            if entry["status"] == "available":
+                continue
+            desc = entry["label"] if entry["label"] != entry["hostname"] else ""
+            if entry["notes"]:
+                desc = f"{desc} — {entry['notes']}" if desc else entry["notes"]
+            writer.writerow(
+                _safe_row(
+                    [
+                        f"{entry['ip']}/{prefixlen}",
+                        _NETBOX_EXPORT_STATUS.get(entry["status"], "active"),
+                        entry["hostname"],
+                        desc,
+                        entry["owner"],
+                    ]
+                )
+            )
+        suffix = "netbox"
+    else:
+        fields = ["ip", "status", "hostname", "mac", "label", "owner", "notes", "in_pool", "device", "vendor"]
+        writer = csv.writer(output)
+        writer.writerow(fields)
+        for entry in space:
+            dev = entry.get("device") or {}
+            writer.writerow(
+                _safe_row(
+                    [
+                        entry["ip"],
+                        entry["status"],
+                        entry["hostname"],
+                        entry["mac"],
+                        entry["label"],
+                        entry["owner"],
+                        entry["notes"],
+                        "yes" if entry["in_pool"] else "no",
+                        dev.get("name", ""),
+                        dev.get("manufacturer", ""),
+                    ]
+                )
+            )
+        suffix = "jen"
 
     safe_name = _FILENAME_SAFE_RE.sub("_", subnet["name"]).strip("_") or "subnet"
     response = make_response(output.getvalue())
     response.headers["Content-Type"] = "text/csv"
-    response.headers["Content-Disposition"] = f"attachment; filename=ipam-{safe_name}-{kind}-{subnet_id}.csv"
+    response.headers["Content-Disposition"] = f"attachment; filename=ipam-{safe_name}-{kind}-{subnet_id}-{suffix}.csv"
     return response
+
+
+@bp.route("/subnet/<kind>/<int:subnet_id>/history")
+@login_required
+def history(kind, subnet_id):
+    """JSON (the edit modal's History section) or CSV (`?format=csv`)."""
+    subnet = _check_access(kind, subnet_id)
+    if subnet is None:
+        return jsonify({"error": "not found"}), 404
+    db_kind = _KIND_DB[kind]
+    if request.args.get("format") == "csv":
+        rows = _history_rows(db_kind, subnet_id, limit=5000)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["when_utc", "ip", "action", "label", "owner", "by"])
+        for r in rows:
+            writer.writerow(_safe_row([r["acted_at"], r["ip"], r["action"], r["label"], r["owner"], r["acted_by"]]))
+        safe_name = _FILENAME_SAFE_RE.sub("_", subnet["name"]).strip("_") or "subnet"
+        response = make_response(output.getvalue())
+        response.headers["Content-Type"] = "text/csv"
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=ipam-history-{safe_name}-{kind}-{subnet_id}.csv"
+        )
+        return response
+    ip = _extract_ip(request.args.get("ip", ""))
+    return jsonify({"rows": _history_rows(db_kind, subnet_id, ip=ip, limit=10 if ip else 50)})
 
 
 @bp.route("/subnet/<kind>/<int:subnet_id>/import/preview", methods=["POST"])
@@ -633,7 +1064,7 @@ def import_preview(kind, subnet_id):
             in_subnet = ipaddress.IPv4Address(row["ip"]) in network
         except ValueError:
             in_subnet = False
-        mac = _normalize_mac(row.get("mac", "")) or "" if kind == "u" else ""
+        mac = _normalize_mac(row.get("mac", "")) or ""
         preview_rows.append(
             {
                 "ip": row["ip"],
@@ -641,7 +1072,7 @@ def import_preview(kind, subnet_id):
                 "label": row.get("label", "")[:100],
                 "owner": row.get("owner", "")[:100],
                 "notes": row.get("notes", ""),
-                "hostname": row.get("hostname", "")[:255] if kind == "u" else "",
+                "hostname": row.get("hostname", "")[:255],
                 "mac": mac,
                 "in_subnet": in_subnet,
             }
@@ -663,6 +1094,27 @@ def import_preview(kind, subnet_id):
         rows=importable,
         skipped=skipped,
         payload=json.dumps(importable),
+    )
+
+
+def _upsert_entry(cur, ip, db_kind, subnet_id, label, owner, notes, hostname, mac, status):
+    is_static = 1 if status == "static" else 0
+    cur.execute(
+        """
+        INSERT INTO ipam_static_entries
+            (ip, subnet_kind, subnet_id, label, owner, notes,
+             hostname, mac, is_static, entry_status,
+             created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                UTC_TIMESTAMP(), UTC_TIMESTAMP())
+        ON DUPLICATE KEY UPDATE
+            label=VALUES(label), owner=VALUES(owner),
+            notes=VALUES(notes), hostname=VALUES(hostname),
+            mac=VALUES(mac), is_static=VALUES(is_static),
+            entry_status=VALUES(entry_status),
+            updated_at=UTC_TIMESTAMP()
+    """,
+        (ip, db_kind, subnet_id, label, owner, notes, hostname, mac, is_static, status),
     )
 
 
@@ -712,41 +1164,15 @@ def import_commit(kind, subnet_id):
                     continue
 
                 status = row.get("status")
-                if status not in ("static", "planned"):
+                if status not in _DESIGNATED:
                     status = "available"
                 label = str(row.get("label", "") or "")[:100]
                 owner = str(row.get("owner", "") or "")[:100]
                 notes = str(row.get("notes", "") or "")
-                hostname = str(row.get("hostname", "") or "")[:255] if kind == "u" else ""
-                mac = (_normalize_mac(row.get("mac", "")) or "") if kind == "u" else ""
-                is_static = 1 if status == "static" else 0
-
-                cur.execute(
-                    """
-                    INSERT INTO ipam_static_entries
-                        (ip, subnet_kind, subnet_id, label, owner, notes,
-                         hostname, mac, is_static, entry_status,
-                         created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            UTC_TIMESTAMP(), UTC_TIMESTAMP())
-                    ON DUPLICATE KEY UPDATE
-                        label=VALUES(label), owner=VALUES(owner),
-                        notes=VALUES(notes), hostname=VALUES(hostname),
-                        mac=VALUES(mac), is_static=VALUES(is_static),
-                        entry_status=VALUES(entry_status),
-                        updated_at=UTC_TIMESTAMP()
-                """,
-                    (ip, db_kind, subnet_id, label, owner, notes, hostname, mac, is_static, status),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO ipam_assignment_history
-                        (ip, subnet_kind, subnet_id, label, owner, action,
-                         acted_at, acted_by)
-                    VALUES (%s, %s, %s, %s, %s, 'import', UTC_TIMESTAMP(), %s)
-                """,
-                    (ip, db_kind, subnet_id, label, owner, current_user.username),
-                )
+                hostname = str(row.get("hostname", "") or "")[:255]
+                mac = _normalize_mac(row.get("mac", "")) or ""
+                _upsert_entry(cur, ip, db_kind, subnet_id, label, owner, notes, hostname, mac, status)
+                _record_history(cur, ip, db_kind, subnet_id, "import", label, owner)
                 saved += 1
         db.commit()
         if saved:
@@ -794,7 +1220,7 @@ def save_entry(kind, subnet_id):
     # ipam_status: 'static' = designated static, 'planned' = earmarked for
     # future use, 'available' = plain annotation (or nothing at all).
     ipam_status = request.form.get("ipam_status", "").strip()
-    if ipam_status not in ("static", "planned"):
+    if ipam_status not in _DESIGNATED:
         ipam_status = "available"
 
     try:
@@ -813,17 +1239,13 @@ def save_entry(kind, subnet_id):
         flash(f"{ip} is not inside {subnet['cidr']}.", "error")
         return redirect(detail_url)
 
-    # Manual hostname/MAC only apply to unmanaged subnets.
-    if kind != "u":
-        hostname, mac = "", ""
-    else:
-        mac = _normalize_mac(mac_raw)
-        if mac is None:
-            flash("Invalid MAC address format.", "error")
-            return redirect(detail_url)
-
-    is_static = 1 if ipam_status == "static" else 0
-    entry_status = ipam_status
+    # v1.5.0 — a manual hostname/MAC is allowed on Kea subnets too: a
+    # genuinely static host (no DHCP) has a MAC the operator knows, and
+    # Network Discovery matches on it.
+    mac = _normalize_mac(mac_raw)
+    if mac is None:
+        flash("Invalid MAC address format.", "error")
+        return redirect(detail_url)
 
     # Status set back to available with nothing else filled in — clear the entry.
     if ipam_status == "available" and not label and not owner and not notes and not hostname and not mac:
@@ -838,14 +1260,7 @@ def save_entry(kind, subnet_id):
                 """,
                     (ip, db_kind, subnet_id),
                 )
-                cur.execute(
-                    """
-                    INSERT INTO ipam_assignment_history
-                        (ip, subnet_kind, subnet_id, action, acted_at, acted_by)
-                    VALUES (%s, %s, %s, 'cleared', UTC_TIMESTAMP(), %s)
-                """,
-                    (ip, db_kind, subnet_id, current_user.username),
-                )
+                _record_history(cur, ip, db_kind, subnet_id, "cleared")
             db.commit()
             flash(f"Entry for {ip} cleared.", "success")
         except Exception as e:
@@ -859,30 +1274,9 @@ def save_entry(kind, subnet_id):
     try:
         db = _jen_db()
         with db.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO ipam_static_entries
-                    (ip, subnet_kind, subnet_id, label, owner, notes,
-                     hostname, mac, is_static, entry_status, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        UTC_TIMESTAMP(), UTC_TIMESTAMP())
-                ON DUPLICATE KEY UPDATE
-                    label=VALUES(label), owner=VALUES(owner),
-                    notes=VALUES(notes), hostname=VALUES(hostname),
-                    mac=VALUES(mac), is_static=VALUES(is_static),
-                    entry_status=VALUES(entry_status),
-                    updated_at=UTC_TIMESTAMP()
-            """,
-                (ip, db_kind, subnet_id, label, owner, notes, hostname, mac, is_static, entry_status),
-            )
-            cur.execute(
-                """
-                INSERT INTO ipam_assignment_history
-                    (ip, subnet_kind, subnet_id, label, owner, action,
-                     acted_at, acted_by)
-                VALUES (%s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), %s)
-            """,
-                (ip, db_kind, subnet_id, label, owner, "static" if is_static else "note", current_user.username),
+            _upsert_entry(cur, ip, db_kind, subnet_id, label, owner, notes, hostname, mac, ipam_status)
+            _record_history(
+                cur, ip, db_kind, subnet_id, ipam_status if ipam_status != "available" else "note", label, owner
             )
         db.commit()
         flash(f"Entry saved for {ip}.", "success")
@@ -925,14 +1319,7 @@ def delete_entry(kind, subnet_id):
             """,
                 (ip, db_kind, subnet_id),
             )
-            cur.execute(
-                """
-                INSERT INTO ipam_assignment_history
-                    (ip, subnet_kind, subnet_id, action, acted_at, acted_by)
-                VALUES (%s, %s, %s, 'removed', UTC_TIMESTAMP(), %s)
-            """,
-                (ip, db_kind, subnet_id, current_user.username),
-            )
+            _record_history(cur, ip, db_kind, subnet_id, "removed")
         db.commit()
         flash(f"Entry for {ip} removed.", "success")
         _audit("IPAM_DELETE", ip, f"kind={db_kind} subnet={subnet_id} entry removed")
@@ -942,6 +1329,88 @@ def delete_entry(kind, subnet_id):
         if db:
             db.close()
 
+    return redirect(detail_url)
+
+
+def _range_addresses(network, first_raw, last_raw):
+    """Pure: the host addresses from first to last inclusive, both inside
+    the subnet, capped at _RANGE_MAX. Returns (ips, error)."""
+    try:
+        first = ipaddress.IPv4Address((first_raw or "").strip())
+        last = ipaddress.IPv4Address((last_raw or "").strip())
+    except ValueError:
+        return [], "Both ends of the range must be IPv4 addresses."
+    if first not in network or last not in network:
+        return [], f"The range must lie inside {network}."
+    if last < first:
+        return [], "The range end is before its start."
+    if int(last) - int(first) + 1 > _RANGE_MAX:
+        return [], f"A range action covers at most {_RANGE_MAX} addresses at a time."
+    hosts = {network.network_address, network.broadcast_address} if network.prefixlen < 31 else set()
+    return [
+        str(ipaddress.IPv4Address(n)) for n in range(int(first), int(last) + 1) if ipaddress.IPv4Address(n) not in hosts
+    ], ""
+
+
+@bp.route("/range/<kind>/<int:subnet_id>", methods=["POST"])
+@login_required
+def range_action(kind, subnet_id):
+    """v1.5.0 — mark a from–to span planned/static (one label/owner) or
+    clear it; one history row per address."""
+    subnet = _check_access(kind, subnet_id)
+    if subnet is None:
+        flash("Subnet not found or access denied.", "error")
+        return redirect(url_for("ipam.index"))
+    db_kind = _KIND_DB[kind]
+    detail_url = url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id)
+
+    action = request.form.get("action", "").strip()
+    if action not in ("static", "planned", "clear"):
+        flash("Unknown range action.", "error")
+        return redirect(detail_url)
+    network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    ips, err = _range_addresses(network, request.form.get("first", ""), request.form.get("last", ""))
+    if err:
+        flash(err, "error")
+        return redirect(detail_url)
+    label = request.form.get("label", "").strip()[:100]
+    owner = request.form.get("owner", "").strip()[:100]
+
+    # Never overwrite a reservation's or a live lease's address silently.
+    skipped = set()
+    if kind == "kea" and action != "clear":
+        leases, res = _load_kea_sets(subnet_id)
+        skipped = (set(leases) | set(res)) & set(ips)
+        ips = [ip for ip in ips if ip not in skipped]
+
+    db = None
+    done = 0
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            for ip in ips:
+                if action == "clear":
+                    cur.execute(
+                        "DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_kind=%s AND subnet_id=%s",
+                        (ip, db_kind, subnet_id),
+                    )
+                    _record_history(cur, ip, db_kind, subnet_id, "cleared")
+                else:
+                    _upsert_entry(cur, ip, db_kind, subnet_id, label, owner, "", "", "", action)
+                    _record_history(cur, ip, db_kind, subnet_id, action, label, owner)
+                done += 1
+        db.commit()
+        verb = "cleared" if action == "clear" else f"marked {action}"
+        msg = f"{done} address{'es' if done != 1 else ''} {verb}."
+        if skipped:
+            msg += f" {len(skipped)} skipped (a Kea lease or reservation is there)."
+        flash(msg, "success")
+        _audit("IPAM_RANGE", subnet["cidr"], f"kind={db_kind} subnet={subnet_id} action={action} count={done}")
+    except Exception as e:
+        flash(f"Range action failed: {e}", "error")
+    finally:
+        if db:
+            db.close()
     return redirect(detail_url)
 
 
@@ -958,6 +1427,7 @@ def add_subnet():
     name = request.form.get("name", "").strip()[:100]
     cidr_raw = request.form.get("cidr", "").strip()
     description = request.form.get("description", "").strip()
+    gateway = request.form.get("gateway", "").strip()
 
     if not name:
         flash("Subnet name is required.", "error")
@@ -972,6 +1442,14 @@ def add_subnet():
     if network.prefixlen < _MAX_PREFIX:
         flash(f"Subnets larger than a /{_MAX_PREFIX} are not supported.", "error")
         return redirect(url_for("ipam.index"))
+
+    if gateway:
+        try:
+            if ipaddress.IPv4Address(gateway) not in network:
+                raise ValueError
+        except ValueError:
+            flash(f"The gateway must be an address inside {network}.", "error")
+            return redirect(url_for("ipam.index"))
 
     cidr = str(network)
 
@@ -998,20 +1476,14 @@ def add_subnet():
             cur.execute(
                 """
                 INSERT INTO ipam_subnets
-                    (name, cidr, description, created_at, updated_at)
-                VALUES (%s, %s, %s, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+                    (name, cidr, description, gateway, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(), UTC_TIMESTAMP())
             """,
-                (name, cidr, description),
+                (name, cidr, description, gateway or None),
             )
         db.commit()
         flash(f"Unmanaged subnet {name} ({cidr}) added.", "success")
-        _audit("IPAM_SUBNET_ADD", cidr, f"name={name}")
-        if network.prefixlen < _WARN_PREFIX:
-            flash(
-                f"Note: {cidr} contains {network.num_addresses - 2} host "
-                "addresses — the detail page will render a large table.",
-                "warning",
-            )
+        _audit("IPAM_SUBNET_ADD", cidr, f"name={name} gateway={gateway}")
     except Exception as e:
         flash(f"Error adding subnet: {e}", "error")
     finally:
