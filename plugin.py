@@ -101,32 +101,32 @@ _GENERIC_HEADER_ALIASES = {
 
 
 def _jen_db():
-    from jen.models.db import get_jen_db
+    from jen.plugin_api import get_jen_db
 
     return get_jen_db()
 
 
 def _kea_db():
-    from jen.models.db import get_kea_db
+    from jen.plugin_api import get_kea_db
 
     return get_kea_db()
 
 
 def _accessible_subnets():
-    from jen.services.access import get_accessible_subnet_map
+    from jen.plugin_api import get_accessible_subnet_map
 
     return get_accessible_subnet_map()
 
 
 def _assert_kea_access(subnet_id):
-    from jen.services.access import assert_subnet_access
+    from jen.plugin_api import assert_subnet_access
 
     return assert_subnet_access(subnet_id)
 
 
 def _is_admin():
     try:
-        from jen.services.access import is_admin_or_above
+        from jen.plugin_api import is_admin_or_above
 
         return is_admin_or_above()
     except Exception:
@@ -139,9 +139,9 @@ def _is_admin():
 
 def _audit(action, target, detail):
     try:
-        from jen.models import user as _user
+        from jen.plugin_api import audit
 
-        _user.audit(action, target, detail)
+        audit(action, target, detail)
     except Exception as e:
         logger.error(f"IPAM: audit failed: {e}")
 
@@ -150,7 +150,7 @@ def _safe_row(values):
     """Jen's CSV formula-injection guard (v5.30.0); a local copy of the
     same rule when running against an older Jen."""
     try:
-        from jen.services.csv_safe import safe_row
+        from jen.plugin_api import safe_row
 
         return safe_row(values)
     except Exception:
@@ -242,7 +242,7 @@ def _subnet_ctx(kind, subnet_id, subnet):
     Kea servers' and Jen host's addresses, notes), else the bare one."""
     if kind == "kea":
         try:
-            from jen.services.subnet_context import subnet_context
+            from jen.plugin_api import subnet_context
 
             ctx = subnet_context(subnet_id)
             if ctx:
