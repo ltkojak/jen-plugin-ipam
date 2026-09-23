@@ -282,6 +282,58 @@ def main():
     # ── csv guard fallback ───────────────────────────────────────────────────
     check(p._safe_row(["=1+1", "ok", None]) == ["'=1+1", "ok", ""], "CSV formula guard (local fallback)")
 
+    # ── write gate (v1.5.2) — viewers can look at IPAM but not change it ────
+    p.current_user.role = "viewer"
+    check(p._is_admin() is False, "a viewer is not admin")
+    check(p._require_write() is False, "a viewer cannot write")
+    # request is None in this harness; a route that reaches request.form/
+    # request.files raises AttributeError, so returning None without
+    # raising proves _require_write() stopped it first.
+    for fn, args in (
+        (p.save_entry, ("kea", 1)),
+        (p.delete_entry, ("kea", 1)),
+        (p.range_action, ("kea", 1)),
+        (p.import_preview, ("kea", 1)),
+        (p.import_commit, ("kea", 1)),
+    ):
+        try:
+            fn(*args)
+            gated = True
+        except Exception:
+            gated = False
+        check(gated, f"{fn.__name__} refuses a viewer before touching the request")
+    p.current_user.role = "admin"
+    check(p._is_admin() is True, "admin role restored for the rest of the run")
+
+    # ── import byte cap (v1.5.2) ─────────────────────────────────────────────
+    class _FakeUpload:
+        def __init__(self, data):
+            self._data = data
+
+        def read(self, n=-1):
+            if n < 0 or n > len(self._data):
+                n = len(self._data)
+            out, self._data = self._data[:n], self._data[n:]
+            return out
+
+    try:
+        p._read_csv_rows(_FakeUpload(b"a" * (p._IMPORT_MAX_BYTES + 1)))
+        check(False, "an upload one byte over the cap is refused")
+    except p._ImportTooLarge:
+        check(True, "an upload one byte over the cap is refused")
+
+    # A single _IMPORT_MAX_BYTES-long field trips csv's own unrelated field
+    # size limit — pad with real newlines so this only exercises the byte cap.
+    line = b"ip\n"
+    padded = line * (p._IMPORT_MAX_BYTES // len(line))
+    padded += b"a" * (p._IMPORT_MAX_BYTES - len(padded))
+    check(len(padded) == p._IMPORT_MAX_BYTES, "test fixture is exactly at the cap")
+    try:
+        p._read_csv_rows(_FakeUpload(padded))
+        check(True, "an upload exactly at the cap is accepted")
+    except p._ImportTooLarge:
+        check(False, "an upload exactly at the cap is accepted")
+
     if failures:
         print(f"\n{len(failures)} check(s) failed")
         return 1

@@ -1,7 +1,7 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
   "requires_jen": "5.34.0",

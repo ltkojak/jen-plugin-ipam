@@ -1,5 +1,26 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.5.2] - 2026-09-23
+
+### Viewers were never actually read-only, and an import upload had no size cap
+
+Jen's viewer tier is read-only everywhere else, but IPAM Lite's five
+write routes — saving or deleting an entry, a range action, and both
+steps of a CSV import — checked only subnet access, never the role.
+The templates hid the buttons from viewers, so the UI looked
+read-only while the routes underneath it were not. Every write route
+now refuses a viewer up front, before it even looks at the subnet or
+the submitted form, with a plain "Viewers can look at IPAM but not
+change it."
+
+Separately, a CSV import read the whole uploaded file into memory
+before its 2,000-row cap ever applied, and Jen itself sets no upload
+size limit. Uploads are now capped at 2 MB — about 40x the row cap at
+a typical export's row width — checked both off the browser's
+declared size and against the bytes actually read, so neither an
+honest nor a lying upload gets past it. No functional change for a
+legitimate import. Requires Jen 5.34.0 or later, unchanged.
+
 ## [1.5.1] - 2026-09-15
 
 ### Imports only `jen.plugin_api`

@@ -27,7 +27,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 - **Search + filter** — live client-side search across IP, hostname, label, MAC, owner, and notes; status filter tabs
 - **CSV export** per subnet — Jen's own format and a Netbox-shaped one; every cell passes a formula-injection guard
 - **Assignment history** logged with user and timestamp (UTC), shown per address in the edit modal, in a Recent changes panel, and exportable
-- Respects Jen subnet access control: a user restricted to specific Kea subnets sees only those, and none of the unmanaged subnets; unmanaged subnet add/delete is admin-only
+- Respects Jen subnet access control: a user restricted to specific Kea subnets sees only those, and none of the unmanaged subnets; unmanaged subnet add/delete is admin-only, and viewers are read-only: every change needs admin
 
 ## Installation
 

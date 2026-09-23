@@ -62,6 +62,11 @@ _ALL_STATUSES = ("available", "dynamic", "reserved", "static", "planned", "infra
 
 _IMPORT_FORMATS = {"jen", "netbox", "generic"}
 _IMPORT_MAX_ROWS = 2000
+# v1.5.2 — _read_csv_rows() used to read the whole upload into memory before
+# _IMPORT_MAX_ROWS ever applied, and Jen sets no MAX_CONTENT_LENGTH. 2 MB is
+# about 40x the row cap at Netbox-export row widths, so a legitimate import
+# never gets near it.
+_IMPORT_MAX_BYTES = 2 * 1024 * 1024
 
 # Netbox IPAM status values → Jen entry status. 'reserved' in Netbox means
 # "set aside, not actively assigned yet" — the same idea as Jen's own
@@ -135,6 +140,20 @@ def _is_admin():
         if role is not None:
             return role in ("superadmin", "admin")
         return bool(getattr(current_user, "is_admin", False))
+
+
+def _require_write():
+    """v1.5.2 — Jen's viewer tier is read-only everywhere else; IPAM's five
+    write routes (save_entry, delete_entry, range_action, import_preview,
+    import_commit) used to check only subnet access via _check_access, never
+    the role — the templates hid the buttons from viewers, but the routes
+    themselves were open to anyone with subnet access. Every write route
+    calls this FIRST, before _check_access and before touching
+    request.form/request.files."""
+    if _is_admin():
+        return True
+    flash("Viewers can look at IPAM but not change it.", "error")
+    return False
 
 
 def _audit(action, target, detail):
@@ -677,8 +696,18 @@ def _extract_ip(raw):
         return None
 
 
+class _ImportTooLarge(Exception):
+    """Raised by _read_csv_rows() when the upload exceeds _IMPORT_MAX_BYTES."""
+
+
 def _read_csv_rows(file_storage):
-    text = file_storage.read().decode("utf-8-sig", errors="replace")
+    # v1.5.2 — read at most _IMPORT_MAX_BYTES + 1 bytes rather than the
+    # whole upload: enough to tell "too large" apart from "exactly at the
+    # cap" without ever buffering more than one byte past the limit.
+    raw = file_storage.read(_IMPORT_MAX_BYTES + 1)
+    if len(raw) > _IMPORT_MAX_BYTES:
+        raise _ImportTooLarge("That CSV is larger than 2 MB — split it.")
+    text = raw.decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     rows = list(reader)
     return rows, (reader.fieldnames or [])
@@ -1005,12 +1034,22 @@ def history(kind, subnet_id):
 @bp.route("/subnet/<kind>/<int:subnet_id>/import/preview", methods=["POST"])
 @login_required
 def import_preview(kind, subnet_id):
+    if not _require_write():
+        return redirect(url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id))
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
         return redirect(url_for("ipam.index"))
 
     detail_url = url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id)
+
+    # v1.5.2 — cheap, early refusal off the browser-declared size, before
+    # touching request.form/request.files at all; _read_csv_rows() below
+    # enforces the same cap against the actual bytes read, in case
+    # Content-Length is absent or wrong.
+    if request.content_length and request.content_length > _IMPORT_MAX_BYTES:
+        flash("That CSV is larger than 2 MB — split it.", "error")
+        return redirect(detail_url)
 
     fmt = request.form.get("import_format", "").strip().lower()
     if fmt not in _IMPORT_FORMATS:
@@ -1027,6 +1066,9 @@ def import_preview(kind, subnet_id):
 
     try:
         raw_rows, fieldnames = _read_csv_rows(upload)
+    except _ImportTooLarge as e:
+        flash(str(e), "error")
+        return redirect(detail_url)
     except Exception as e:
         flash(f"Could not read CSV: {e}", "error")
         return redirect(detail_url)
@@ -1121,6 +1163,8 @@ def _upsert_entry(cur, ip, db_kind, subnet_id, label, owner, notes, hostname, ma
 @bp.route("/subnet/<kind>/<int:subnet_id>/import/commit", methods=["POST"])
 @login_required
 def import_commit(kind, subnet_id):
+    if not _require_write():
+        return redirect(url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id))
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
@@ -1203,6 +1247,8 @@ def import_commit(kind, subnet_id):
 @login_required
 def save_entry(kind, subnet_id):
     """Create or update an IPAM entry."""
+    if not _require_write():
+        return redirect(url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id))
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
@@ -1293,6 +1339,8 @@ def save_entry(kind, subnet_id):
 @bp.route("/entry/<kind>/<int:subnet_id>/delete", methods=["POST"])
 @login_required
 def delete_entry(kind, subnet_id):
+    if not _require_write():
+        return redirect(url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id))
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
@@ -1357,6 +1405,8 @@ def _range_addresses(network, first_raw, last_raw):
 def range_action(kind, subnet_id):
     """v1.5.0 — mark a from–to span planned/static (one label/owner) or
     clear it; one history row per address."""
+    if not _require_write():
+        return redirect(url_for("ipam.subnet_detail", kind=kind, subnet_id=subnet_id))
     subnet = _check_access(kind, subnet_id)
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
