@@ -619,14 +619,17 @@ def _check_access(kind, subnet_id):
 # ── History ───────────────────────────────────────────────────────────────────
 
 
-def _record_history(cur, ip, db_kind, subnet_id, action, label="", owner=""):
+def _record_history(cur, ip, db_kind, subnet_id, action, label="", owner="", actor=None):
+    """`actor` overrides current_user.username — the JSON API (v1.6.0) has
+    no Flask-Login session, just an API key, so it passes its own actor
+    string instead."""
     cur.execute(
         """
         INSERT INTO ipam_assignment_history
             (ip, subnet_kind, subnet_id, label, owner, action, acted_at, acted_by)
         VALUES (%s, %s, %s, %s, %s, %s, UTC_TIMESTAMP(), %s)
     """,
-        (ip, db_kind, subnet_id, label, owner, action, current_user.username),
+        (ip, db_kind, subnet_id, label, owner, action, actor or current_user.username),
     )
 
 
@@ -1579,6 +1582,266 @@ def delete_subnet(subnet_id):
     return redirect(url_for("ipam.index"))
 
 
+# ── Conflict alerts (v1.6.0, plugin API v3) ───────────────────────────────────
+
+_CONFLICT_ALERT_TYPE = "ipam_conflict"
+_CONFLICT_TEMPLATE = (
+    "⚠️ <b>IPAM Conflict</b>\n{ip} is designated {designated} in {subnet}, "
+    "but a DHCP client currently holds it.\nHostname: {hostname}\nMAC: {mac}"
+)
+
+
+def _kea_conflicts():
+    """(subnet_id, subnet_info, entry) for every conflict across every Kea
+    subnet Jen knows — unrestricted, for the periodic job (no current_user
+    in a background thread). Unmanaged subnets never produce a conflict:
+    _build_address_space only loads Kea leases for kind='kea'."""
+    from jen.plugin_api import subnet_map
+
+    out = []
+    for sid, info in subnet_map().items():
+        try:
+            space = _build_address_space("kea", sid, info["cidr"], subnet=info)
+        except Exception as e:
+            logger.error(f"IPAM: conflict scan failed for subnet {sid}: {e}")
+            continue
+        for entry in space:
+            if entry["status"] == "conflict":
+                out.append((sid, info, entry))
+    return out
+
+
+def _check_conflicts():
+    """Periodic job (every 15 min): alert once per NEW conflict and drop
+    tracking rows for conflicts that have resolved, so a recurrence alerts
+    again — the same 'alert only once per new occurrence' rule Network
+    Discovery uses for rogue devices."""
+    from jen.plugin_api import emit, send_alert
+
+    conflicts = _kea_conflicts()
+    seen_keys = set()
+    db = None
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            for sid, info, entry in conflicts:
+                key = (entry["ip"], "kea", sid)
+                seen_keys.add(key)
+                cur.execute("SELECT id FROM ipam_conflict_state WHERE ip=%s AND subnet_kind=%s AND subnet_id=%s", key)
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE ipam_conflict_state SET last_seen=UTC_TIMESTAMP() WHERE id=%s", (row["id"],))
+                    continue
+                cur.execute("INSERT INTO ipam_conflict_state (ip, subnet_kind, subnet_id) VALUES (%s, %s, %s)", key)
+                send_alert(
+                    _CONFLICT_ALERT_TYPE,
+                    subnet_id=sid,
+                    ip=entry["ip"],
+                    subnet=info["name"],
+                    designated=entry["designated"] or "static",
+                    hostname=entry["hostname"],
+                    mac=entry["mac"],
+                )
+                emit(
+                    "plugin.ipam.conflict",
+                    mac=entry["mac"] or None,
+                    ip=entry["ip"],
+                    subnet_id=sid,
+                    detail=f"{entry['ip']} designated {entry['designated']} in {info['name']}, but a DHCP client holds it",
+                )
+            cur.execute("SELECT id, ip, subnet_kind, subnet_id FROM ipam_conflict_state")
+            stale = [r["id"] for r in cur.fetchall() if (r["ip"], r["subnet_kind"], r["subnet_id"]) not in seen_keys]
+            for row_id in stale:
+                cur.execute("DELETE FROM ipam_conflict_state WHERE id=%s", (row_id,))
+        db.commit()
+    except Exception as e:
+        logger.error(f"IPAM: conflict check failed: {e}")
+    finally:
+        if db:
+            db.close()
+
+
+# ── Search provider (v1.6.0, plugin API v3) ───────────────────────────────────
+
+
+def _ipam_search(query, accessible_subnet_ids, all_subnets):
+    """register_search_provider callback. Only kea-kind entries are
+    returned: an unmanaged subnet's id is a separate numbering space from
+    Jen's SUBNET_MAP, so it can't be safely compared against
+    accessible_subnet_ids — Jen re-filters kea-kind rows by subnet_id
+    itself afterward (the Q55 rule), this just supplies candidates."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    out = []
+    db = None
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ip, subnet_kind, subnet_id, label, owner, hostname, mac FROM ipam_static_entries
+                WHERE (label LIKE %s OR owner LIKE %s OR ip LIKE %s OR hostname LIKE %s)
+                ORDER BY updated_at DESC LIMIT 20
+            """,
+                (like, like, like, like),
+            )
+            for row in cur.fetchall():
+                if row["subnet_kind"] != "kea":
+                    continue
+                out.append(
+                    {
+                        "title": row["label"] or row["hostname"] or row["ip"],
+                        "subtitle": f"{row['ip']} · {row['owner'] or 'no owner'}",
+                        "href": f"/network/ipam/subnet/kea/{row['subnet_id']}?ip={row['ip']}",
+                        "subnet_id": row["subnet_id"],
+                    }
+                )
+    except Exception as e:
+        logger.error(f"IPAM: search provider failed: {e}")
+    finally:
+        if db:
+            db.close()
+    return out
+
+
+# ── JSON API (v1.6.0, plugin API v3) ──────────────────────────────────────────
+# Undecorated on purpose: api_key_required() is applied in register(app),
+# not here, so plugin.py's top level never imports jen.plugin_api — the
+# standalone harness (tools/test_plugin.py) stubs flask/flask_login only
+# and loads plugin.py with neither Jen nor a database on the path.
+
+api_bp = Blueprint("ipam_api", __name__, url_prefix="/api/v1/plugins/ipam")
+
+
+def _api_subnet_ok(subnet_id):
+    from flask import g
+
+    from jen.plugin_api import filter_subnet_ids
+
+    return subnet_id in filter_subnet_ids(g.api_key, [subnet_id])
+
+
+def _api_list_entries():
+    try:
+        subnet_id = int(request.args.get("subnet_id", ""))
+    except (TypeError, ValueError):
+        return jsonify({"error": "subnet_id is required"}), 400
+    if not _api_subnet_ok(subnet_id):
+        return jsonify({"error": "subnet not accessible to this key"}), 403
+    subnet = _accessible_subnets().get(subnet_id)
+    if subnet is None:
+        return jsonify({"error": "not found"}), 404
+    entries = _load_entries("kea", subnet_id)
+    return jsonify(
+        {
+            "subnet_id": subnet_id,
+            "entries": [
+                {
+                    "ip": ip,
+                    "label": e.get("label") or "",
+                    "owner": e.get("owner") or "",
+                    "notes": e.get("notes") or "",
+                    "hostname": e.get("hostname") or "",
+                    "mac": e.get("mac") or "",
+                    "status": _designated_status(e),
+                }
+                for ip, e in entries.items()
+            ],
+        }
+    )
+
+
+def _api_save_entry():
+    from flask import g
+
+    body = request.get_json(silent=True) or {}
+    try:
+        subnet_id = int(body.get("subnet_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "subnet_id is required"}), 400
+    if not _api_subnet_ok(subnet_id):
+        return jsonify({"error": "subnet not accessible to this key"}), 403
+    subnet = _accessible_subnets().get(subnet_id)
+    if subnet is None:
+        return jsonify({"error": "not found"}), 404
+
+    ip = str(body.get("ip", "")).strip()
+    try:
+        addr = ipaddress.IPv4Address(ip)
+        network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    except ValueError:
+        return jsonify({"error": "invalid ip"}), 400
+    if addr not in network:
+        return jsonify({"error": f"{ip} is not inside {subnet['cidr']}"}), 400
+
+    status = body.get("status", "static")
+    if status not in _DESIGNATED:
+        status = "static"
+    label = str(body.get("label", "") or "")[:100]
+    owner = str(body.get("owner", "") or "")[:100]
+    notes = str(body.get("notes", "") or "")
+    hostname = str(body.get("hostname", "") or "")[:255]
+    mac = _normalize_mac(body.get("mac", "")) or ""
+    actor = f"api:{g.api_key['name']}"
+
+    db = None
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            _upsert_entry(cur, ip, "kea", subnet_id, label, owner, notes, hostname, mac, status)
+            _record_history(cur, ip, "kea", subnet_id, status, label, owner, actor=actor)
+        db.commit()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if db:
+            db.close()
+    return jsonify({"ok": True, "ip": ip, "status": status})
+
+
+def _api_next_free(subnet_id):
+    if not _api_subnet_ok(subnet_id):
+        return jsonify({"error": "subnet not accessible to this key"}), 403
+    subnet = _accessible_subnets().get(subnet_id)
+    if subnet is None:
+        return jsonify({"error": "not found"}), 404
+    space = _build_address_space("kea", subnet_id, subnet["cidr"], subnet=subnet)
+    return jsonify({"ip": _next_free(space)})
+
+
 def register(app):
     app.register_blueprint(bp)
+
+    from jen.plugin_api import (
+        api_key_required,
+        register_alert_type,
+        register_periodic,
+        register_row_action,
+        register_search_provider,
+    )
+
+    api_bp.add_url_rule(
+        "/entries", "api_list_entries", api_key_required(write=False)(_api_list_entries), methods=["GET"]
+    )
+    api_bp.add_url_rule("/entries", "api_save_entry", api_key_required(write=True)(_api_save_entry), methods=["POST"])
+    api_bp.add_url_rule(
+        "/next-free/<int:subnet_id>", "api_next_free", api_key_required(write=False)(_api_next_free), methods=["GET"]
+    )
+    app.register_blueprint(api_bp)
+
+    register_alert_type(
+        "ipam", _CONFLICT_ALERT_TYPE, label="IPAM Conflict", icon="triangle-alert", default_template=_CONFLICT_TEMPLATE
+    )
+    register_periodic("ipam", "conflict_check", _check_conflicts, every_minutes=15)
+    register_row_action(
+        "ipam",
+        "reservation",
+        label="Open in IPAM",
+        icon="clipboard-list",
+        href="/network/ipam/subnet/kea/{subnet_id}?ip={ip}",
+    )
+    register_search_provider("ipam", title="IPAM", fn=_ipam_search)
+
     logger.info("IPAM Lite plugin registered")

@@ -3,77 +3,139 @@
 {% block content %}
 {% set unmanaged = (kind == 'u') %}
 
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+<div class="page-header ip-1bcfaf">
     <div>
-        <h1>📋 {{ subnet.name }}
+        <h1>{{ icon("clipboard-list", "ico-lg") }} {{ subnet.name }}
             {% if unmanaged %}
-            <span style="font-size:11px;font-weight:600;color:var(--warning);
-                         border:1px solid var(--warning);border-radius:3px;
-                         padding:2px 6px;margin-left:8px;vertical-align:middle;
-                         text-transform:uppercase;letter-spacing:.04em;">unmanaged</span>
+            <span class="ip-884510">unmanaged</span>
             {% endif %}
         </h1>
         <p>{{ subnet.cidr }} · {{ space|length }} addresses
            {% if unmanaged and subnet.description %} · {{ subnet.description }}{% endif %}</p>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;display:flex;gap:14px;flex-wrap:wrap;">
-            {% if ctx.gateways %}<span>🚪 Gateway {{ ctx.gateways|join(', ') }}</span>{% endif %}
-            {% if ctx.dns %}<span>🔎 DNS {{ ctx.dns|join(', ') }}</span>{% endif %}
-            {% if pool_texts %}<span>🏊 Pools {{ pool_texts|join(' · ') }}</span>{% elif not unmanaged %}<span>🏊 No DHCP pools in this subnet</span>{% endif %}
+        <div class="ip-ded5d8">
+            {% if ctx.gateways %}<span>{{ icon("network") }} Gateway {{ ctx.gateways|join(', ') }}</span>{% endif %}
+            {% if ctx.dns %}<span>{{ icon("search") }} DNS {{ ctx.dns|join(', ') }}</span>{% endif %}
+            {% if pool_texts %}<span>{{ icon("list") }} Pools {{ pool_texts|join(' · ') }}</span>{% elif not unmanaged %}<span>{{ icon("list") }} No DHCP pools in this subnet</span>{% endif %}
         </div>
-        {% if ctx.notes %}<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">📝 {{ ctx.notes }}</div>{% endif %}
+        {% if ctx.notes %}<div class="ip-bd72d7">{{ icon("file-pen") }} {{ ctx.notes }}</div>{% endif %}
     </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <div class="ip-06307d">
         {% if next_free %}
-        <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">✨ Next free: {{ next_free }}</a>
+        <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">{{ icon("zap") }} Next free: {{ next_free }}</a>
         {% endif %}
         <button id="ipam-range-btn" class="btn btn-secondary btn-sm">⇔ Range…</button>
-        <button id="ipam-import-btn" class="btn btn-secondary btn-sm">⬆ Import</button>
-        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ CSV</a>
-        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">⬇ Netbox CSV</a>
+        <button id="ipam-import-btn" class="btn btn-secondary btn-sm">{{ icon("upload") }} Import</button>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">{{ icon("download") }} CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">{{ icon("download") }} Netbox CSV</a>
         {% if unmanaged and is_admin %}
-        <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm" style="color:var(--danger);">🗑 Delete Subnet</button>
+        <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm ip-497726">{{ icon("trash") }} Delete Subnet</button>
         {% endif %}
         <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
     </div>
 </div>
 
+<style>
+/* v1.6.0 — static declarations moved off individual elements; see
+   index.html's <style> block for the convention this follows. */
+.ip-0353c5{font-size:12px;color:#8b5cf6}
+.ip-046678{width:100%}
+.ip-05308d{font-size:24px;font-weight:700;color:var(--warning)}
+.ip-06307d{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ip-0ee7c1{font-size:12px;color:var(--primary)}
+.ip-116966{margin:0}
+.ip-12797c{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(460px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+.ip-1731fd{color:var(--primary);font-weight:600;white-space:nowrap}
+.ip-1756d8{font-weight:normal;font-size:11px;margin-left:8px}
+.ip-1bcfaf{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.ip-1e68fa{display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.ip-24c1b8{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.ip-2a1f67{opacity:.7}
+.ip-2ba4f9{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap}
+.ip-30f624{height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden}
+.ip-31b9be{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;padding:0 4px;margin-left:6px;vertical-align:middle}
+.ip-37e8cf{font-size:24px;font-weight:700;color:var(--primary)}
+.ip-41d7d7{padding:0}
+.ip-426a01{font-size:12px;color:var(--warning)}
+.ip-426a21{font-size:24px;font-weight:700;color:var(--success)}
+.ip-459b08{font-size:12px;color:var(--text-muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ip-45df24{color:var(--primary);font-family:monospace}
+.ip-4703c3{width:100%;box-sizing:border-box;padding-right:34px}
+.ip-497726{color:var(--danger)}
+.ip-571fbe{font-size:24px;font-weight:700;color:var(--danger)}
+.ip-5872de{color:var(--text-muted)}
+.ip-5e0faa{font-size:13px}
+.ip-6157e8{display:flex;gap:6px;flex-wrap:wrap}
+.ip-627512{font-size:11px;color:var(--text-muted);margin-top:4px}
+.ip-7086d3{font-weight:600;margin-bottom:6px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;font-size:10px}
+.ip-749148{font-size:11px;color:var(--text-muted)}
+.ip-755013{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+.ip-7b1dd1{flex:1;min-width:200px}
+.ip-8573ba{width:80px}
+.ip-865c33{font-size:12px;color:var(--text-muted)}
+.ip-86abda{white-space:nowrap}
+.ip-884510{font-size:11px;font-weight:600;color:var(--warning);border:1px solid var(--warning);border-radius:3px;padding:2px 6px;margin-left:8px;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em}
+.ip-88b841{font-size:24px;font-weight:700;color:#8b5cf6}
+.ip-8a0402{font-size:11px;color:var(--text-muted);margin-top:8px}
+.ip-91a870{text-align:center}
+.ip-9afaf8{margin-top:16px;font-size:12px;color:var(--text-muted)}
+.ip-a20aaa{font-size:24px;font-weight:700;color:var(--text-muted)}
+.ip-a27006{font-weight:600;margin-bottom:4px}
+.ip-a6b9b8{display:flex;gap:10px;margin-top:8px}
+.ip-a6df03{width:100%;resize:vertical}
+.ip-bd72d7{font-size:12px;color:var(--text-muted);margin-top:4px}
+.ip-c4d0b1{background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1}
+.ip-c5b0b8{margin-top:8px;font-size:12px}
+.ip-c8a208{display:flex;gap:4px;align-items:center}
+.ip-cddd8f{color:var(--text-muted);text-decoration:none}
+.ip-d44f6d{margin-bottom:3px}
+.ip-d92d40{font-size:12px;color:var(--success)}
+.ip-dd269a{padding:3px 7px}
+.ip-ded5d8{font-size:12px;color:var(--text-muted);margin-top:4px;display:flex;gap:14px;flex-wrap:wrap}
+.ip-f0a31b{margin-bottom:10px;position:relative}
+.ip-f3ca1e{font-size:12px;color:var(--text-muted);margin-top:3px}
+.ip-f61f50{cursor:pointer;font-weight:600;font-size:13px}
+.ip-fa6c84{margin-left:auto;color:var(--danger)}
+.ip-fdf20b{padding:12px 16px}
+.ip-ffcb32{font-size:12px;color:var(--danger)}
+</style>
+
 <!-- Summary + filters -->
 <div class="card">
-    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.available }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Available</div>
+    <div class="ip-1e68fa">
+        <div class="ip-91a870">
+            <div class="ip-426a21">{{ counts.available }}</div>
+            <div class="ip-749148">Available</div>
         </div>
         {% if not unmanaged %}
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ counts.dynamic }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Dynamic</div>
+        <div class="ip-91a870">
+            <div class="ip-37e8cf">{{ counts.dynamic }}</div>
+            <div class="ip-749148">Dynamic</div>
         </div>
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.reserved }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Reserved</div>
+        <div class="ip-91a870">
+            <div class="ip-426a21">{{ counts.reserved }}</div>
+            <div class="ip-749148">Reserved</div>
         </div>
         {% endif %}
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Static</div>
+        <div class="ip-91a870">
+            <div class="ip-05308d">{{ counts.static }}</div>
+            <div class="ip-749148">Static</div>
         </div>
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:#8b5cf6;">{{ counts.planned }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Planned</div>
+        <div class="ip-91a870">
+            <div class="ip-88b841">{{ counts.planned }}</div>
+            <div class="ip-749148">Planned</div>
         </div>
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--text-muted);">{{ counts.infrastructure }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Infrastructure</div>
+        <div class="ip-91a870">
+            <div class="ip-a20aaa">{{ counts.infrastructure }}</div>
+            <div class="ip-749148">Infrastructure</div>
         </div>
         {% if counts.conflict %}
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--danger);">{{ counts.conflict }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Conflict</div>
+        <div class="ip-91a870">
+            <div class="ip-571fbe">{{ counts.conflict }}</div>
+            <div class="ip-749148">Conflict</div>
         </div>
         {% endif %}
-        <div style="flex:1;min-width:200px;">
-            <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
+        <div class="ip-7b1dd1">
+            <div class="ip-30f624">
                 {% if not unmanaged %}
                 <div style="width:{{ (counts.dynamic / space|length * 100)|round }}%;background:var(--primary);"></div>
                 <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
@@ -83,17 +145,17 @@
                 <div style="width:{{ (counts.infrastructure / space|length * 100)|round }}%;background:var(--text-muted);"></div>
                 <div style="width:{{ (counts.conflict / space|length * 100)|round }}%;background:var(--danger);"></div>
             </div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+            <div class="ip-627512">
                 {{ counts.pct }}% utilised
             </div>
         </div>
     </div>
 
     <!-- Search box -->
-    <div style="margin-bottom:10px;position:relative;">
+    <div class="ip-f0a31b">
         <input type="text" id="ipam-search"
-               placeholder="🔍  Search IP, hostname, label, MAC, owner, device…"
-               style="width:100%;box-sizing:border-box;padding-right:34px;"
+               placeholder="Search IP, hostname, label, MAC, owner, device…"
+               class="ip-4703c3"
                autocomplete="off">
         <button id="search-clear" title="Clear search"
                 style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);
@@ -102,7 +164,7 @@
     </div>
 
     <!-- Filter tabs -->
-    <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
+    <div class="ip-6157e8" id="filter-tabs">
         <button class="btn btn-sm btn-secondary" data-filter="all">All ({{ space|length }})</button>
         <button class="btn btn-sm btn-secondary" data-filter="available">Available ({{ counts.available }})</button>
         {% if not unmanaged %}
@@ -113,19 +175,19 @@
         <button class="btn btn-sm btn-secondary" data-filter="planned">Planned ({{ counts.planned }})</button>
         <button class="btn btn-sm btn-secondary" data-filter="infrastructure">Infrastructure ({{ counts.infrastructure }})</button>
         {% if counts.conflict %}
-        <button class="btn btn-sm btn-secondary" data-filter="conflict" style="color:var(--danger);">⚠ Conflict ({{ counts.conflict }})</button>
+        <button class="btn btn-sm btn-secondary ip-497726" data-filter="conflict">{{ icon("triangle-alert") }} Conflict ({{ counts.conflict }})</button>
         {% endif %}
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
     {% if collapsed %}
-    <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">Runs of available addresses are shown as one row — click a run to expand it, or <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, all=1) }}">show every address</a>.</div>
+    <div class="ip-8a0402">Runs of available addresses are shown as one row — click a run to expand it, or <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, all=1) }}">show every address</a>.</div>
     {% endif %}
 </div>
 
 <!-- Address table -->
-<div class="card" style="padding:0;">
+<div class="card ip-41d7d7">
 <div class="table-wrap">
-<table id="ipam-table">
+<table id="ipam-table" class="rowlist">
     <thead><tr>
         <th>IP Address</th>
         <th>Status</th>
@@ -134,14 +196,14 @@
         <th>MAC Address</th>
         <th>Owner</th>
         <th>Notes</th>
-        <th style="width:80px;"></th>
+        <th class="ip-8573ba"></th>
     </tr></thead>
     <tbody>
     {% for entry in rows %}
     {% if entry.get('run') %}
     <tr data-status="available" data-search="{{ entry.first }} {{ entry.last }} available">
-        <td class="mono" style="color:var(--text-muted);" colspan="{% if unmanaged %}7{% else %}8{% endif %}">
-            <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, expand=entry.key) }}" style="color:var(--text-muted);text-decoration:none;">
+        <td class="mono ip-5872de" data-m="full" colspan="{% if unmanaged %}7{% else %}8{% endif %}">
+            <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, expand=entry.key) }}" class="ip-cddd8f">
                 ○ {{ entry.first }} – {{ entry.last }} &nbsp;·&nbsp; {{ entry.count }} available{% if entry.in_pool %} (in a DHCP pool){% else %} (outside the pools){% endif %} &nbsp;▸ expand
             </a>
         </td>
@@ -149,59 +211,58 @@
     {% else %}
     <tr data-status="{{ entry.status }}" data-ip="{{ entry.ip }}"
         data-search="{{ entry.ip }} {{ entry.hostname }} {{ entry.label }} {{ entry.mac }} {{ entry.owner }} {{ entry.notes }} {{ entry.device.name if entry.device else '' }} {{ entry.device.manufacturer if entry.device else '' }}">
-        <td class="mono" style="color:var(--primary);font-weight:600;white-space:nowrap;">{{ entry.ip }}
-            {% if not unmanaged %}{% if entry.in_pool %}<span title="Inside a DHCP pool" style="font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:3px;padding:0 4px;margin-left:6px;vertical-align:middle;">pool</span>{% endif %}{% endif %}
+        <td class="mono ip-1731fd" data-m="primary">{{ entry.ip }}
+            {% if not unmanaged %}{% if entry.in_pool %}<span title="Inside a DHCP pool" class="ip-31b9be">pool</span>{% endif %}{% endif %}
         </td>
-        <td>
+        <td data-m="badge">
             {% if entry.status == 'available' %}
-            <span style="font-size:12px;color:var(--text-muted);">○ Available</span>
+            <span class="ip-865c33">○ Available</span>
             {% elif entry.status == 'dynamic' %}
-            <span style="font-size:12px;color:var(--primary);">● Dynamic</span>
+            <span class="ip-0ee7c1">● Dynamic</span>
             {% elif entry.status == 'reserved' %}
-            <span style="font-size:12px;color:var(--success);">● Reserved</span>
+            <span class="ip-d92d40">● Reserved</span>
             {% elif entry.status == 'static' %}
-            <span style="font-size:12px;color:var(--warning);">● Static</span>
+            <span class="ip-426a01">● Static</span>
             {% elif entry.status == 'planned' %}
-            <span style="font-size:12px;color:#8b5cf6;">◔ Planned</span>
+            <span class="ip-0353c5">◔ Planned</span>
             {% elif entry.status == 'infrastructure' %}
-            <span style="font-size:12px;color:var(--text-muted);" title="Known from the subnet's own configuration">◆ {{ entry.label }}</span>
+            <span class="ip-865c33" title="Known from the subnet's own configuration">◆ {{ entry.label }}</span>
             {% elif entry.status == 'conflict' %}
-            <span style="font-size:12px;color:var(--danger);" title="Designated {{ entry.designated }} here, but a DHCP client currently holds this address">⚠ Conflict ({{ entry.designated }} + lease)</span>
+            <span class="ip-ffcb32" title="Designated {{ entry.designated }} here, but a DHCP client currently holds this address">{{ icon("triangle-alert") }} Conflict ({{ entry.designated }} + lease)</span>
             {% endif %}
         </td>
-        <td style="font-size:13px;">{% if entry.status == 'infrastructure' %}{{ entry.hostname or '—' }}{% else %}{{ entry.label or entry.hostname or '—' }}{% endif %}</td>
+        <td class="ip-5e0faa" data-m="secondary">{% if entry.status == 'infrastructure' %}{{ entry.hostname or '—' }}{% else %}{{ entry.label or entry.hostname or '—' }}{% endif %}</td>
         {% if not unmanaged %}
-        <td style="font-size:12px;color:var(--text-muted);">
-            {% if entry.device %}{{ entry.device.icon }} {{ entry.device.name or entry.device.manufacturer or '—' }}{% if entry.device.name and entry.device.manufacturer %} <span style="opacity:.7;">({{ entry.device.manufacturer }})</span>{% endif %}{% else %}—{% endif %}
+        <td class="ip-865c33" data-m="hide">
+            {% if entry.device %}{{ entry.device.icon }} {{ entry.device.name or entry.device.manufacturer or '—' }}{% if entry.device.name and entry.device.manufacturer %} <span class="ip-2a1f67">({{ entry.device.manufacturer }})</span>{% endif %}{% else %}—{% endif %}
         </td>
         {% endif %}
-        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or (entry.device.owner if entry.device else '') or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);max-width:180px;
-                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        <td class="mono ip-865c33" data-m="hide">{{ entry.mac or '—' }}</td>
+        <td class="ip-865c33" data-m="hide">{{ entry.owner or (entry.device.owner if entry.device else '') or '—' }}</td>
+        <td class="ip-459b08" data-m="hide">
             {{ entry.notes or '—' }}
         </td>
-        <td style="white-space:nowrap;">
-            <div style="display:flex;gap:4px;align-items:center;">
-                <button class="btn btn-sm btn-secondary ipam-edit-btn" title="Edit"
-                        data-entry='{{ entry|tojson }}'>✏️</button>
+        <td class="ip-86abda" data-m="trailing">
+            <div class="ip-c8a208">
+                <button class="btn btn-sm btn-secondary ipam-edit-btn" title="Edit" aria-label="Edit"
+                        data-entry='{{ entry|tojson }}'>{{ icon("pencil") }}</button>
 
                 {% if not unmanaged %}
                 {% if entry.status in ('available', 'static', 'planned', 'conflict') %}
                 <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}{% if entry.mac and not entry.mac.startswith('id:') %}&mac={{ entry.mac }}{% endif %}"
-                   class="btn btn-sm btn-secondary" title="Create Reservation" style="padding:3px 7px;">
-                    📌
+                   class="btn btn-sm btn-secondary ip-dd269a" title="Create Reservation" aria-label="Create Reservation">
+                    {{ icon("pin") }}
                 </a>
                 {% endif %}
                 {% if entry.status in ('dynamic', 'conflict') %}
                 <a href="/leases?search={{ entry.ip }}"
-                   class="btn btn-sm btn-secondary" title="View Lease" style="padding:3px 7px;">
-                    🔗
+                   class="btn btn-sm btn-secondary ip-dd269a" title="View Lease" aria-label="View Lease">
+                    {{ icon("link") }}
                 </a>
                 {% elif entry.status == 'reserved' %}
                 <a href="/reservations?search={{ entry.ip }}"
-                   class="btn btn-sm btn-secondary" title="View Reservation" style="padding:3px 7px;">
-                    🔗
+                   class="btn btn-sm btn-secondary ip-dd269a" title="View Reservation" aria-label="View Reservation">
+                    {{ icon("link") }}
                 </a>
                 {% endif %}
                 {% endif %}
@@ -220,9 +281,9 @@
 
 <!-- Recent changes -->
 {% if recent_history %}
-<details class="card" style="padding:12px 16px;">
-    <summary style="cursor:pointer;font-weight:600;font-size:13px;">🕘 Recent changes ({{ recent_history|length }}) <a href="{{ url_for('ipam.history', kind=kind, subnet_id=subnet_id, format='csv') }}" style="font-weight:normal;font-size:11px;margin-left:8px;">⬇ history CSV</a></summary>
-    <table style="margin-top:8px;font-size:12px;">
+<details class="card ip-fdf20b">
+    <summary class="ip-f61f50">{{ icon("clock") }} Recent changes ({{ recent_history|length }}) <a href="{{ url_for('ipam.history', kind=kind, subnet_id=subnet_id, format='csv') }}" class="ip-1756d8">{{ icon("download") }} history CSV</a></summary>
+    <table class="ip-c5b0b8">
         <thead><tr><th>When (UTC)</th><th>IP</th><th>Action</th><th>Label</th><th>Owner</th><th>By</th></tr></thead>
         <tbody>
         {% for h in recent_history %}
@@ -236,25 +297,22 @@
 <!-- Edit Modal -->
 <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
      z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-            width:min(520px,94vw);max-height:90vh;overflow-y:auto;
-            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+<div class="ip-755013">
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <div class="ip-24c1b8">
         <div>
-            <h3 style="margin:0;">✏️ Edit <span id="edit-ip" style="color:var(--primary);font-family:monospace;"></span></h3>
-            <div id="edit-status-label" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
+            <h3 class="ip-116966">{{ icon("pencil") }} Edit <span id="edit-ip" class="ip-45df24"></span></h3>
+            <div id="edit-status-label" class="ip-f3ca1e"></div>
         </div>
-        <button id="edit-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button id="edit-modal-close-btn" class="ip-c4d0b1">✕</button>
     </div>
 
     <!-- Read-only Kea / device info for dynamic/reserved/conflict -->
     <div id="edit-kea-info" style="display:none;background:var(--surface2);border-radius:var(--radius);
          padding:12px 14px;margin-bottom:16px;font-size:12px;">
-        <div style="font-weight:600;margin-bottom:6px;color:var(--text-muted);text-transform:uppercase;
-                    letter-spacing:.04em;font-size:10px;">Kea / Devices (read-only)</div>
-        <div id="edit-kea-hostname" style="margin-bottom:3px;"></div>
-        <div id="edit-kea-mac" style="margin-bottom:3px;"></div>
+        <div class="ip-7086d3">Kea / Devices (read-only)</div>
+        <div id="edit-kea-hostname" class="ip-d44f6d"></div>
+        <div id="edit-kea-mac" class="ip-d44f6d"></div>
         <div id="edit-kea-device"></div>
     </div>
 
@@ -264,7 +322,7 @@
 
         <div id="edit-status-group" class="form-group">
             <label>Status</label>
-            <select name="ipam_status" id="edit-ipam-status" style="width:100%;">
+            <select name="ipam_status" id="edit-ipam-status" class="ip-046678">
                 <option value="available">○ Available — annotation only</option>
                 <option value="static">● Static — manually designated address</option>
                 <option value="planned">◔ Planned — earmarked for future use</option>
@@ -282,53 +340,51 @@
         </div>
 
         <div id="edit-label-group" class="form-group">
-            <label>Label <span style="font-size:11px;color:var(--text-muted);">(e.g. "Router", "NAS", "Printer")</span></label>
-            <input type="text" name="label" id="edit-label" maxlength="100" style="width:100%;" autocomplete="off">
+            <label>Label <span class="ip-749148">(e.g. "Router", "NAS", "Printer")</span></label>
+            <input type="text" name="label" id="edit-label" maxlength="100" class="ip-046678" autocomplete="off">
         </div>
 
         <div id="edit-hostname-group" class="form-group">
-            <label>Hostname <span style="font-size:11px;color:var(--text-muted);">(optional — recorded manually; a static host has no lease to supply it)</span></label>
-            <input type="text" name="hostname" id="edit-hostname" maxlength="255" style="width:100%;" autocomplete="off">
+            <label>Hostname <span class="ip-749148">(optional — recorded manually; a static host has no lease to supply it)</span></label>
+            <input type="text" name="hostname" id="edit-hostname" maxlength="255" class="ip-046678" autocomplete="off">
         </div>
 
         <div id="edit-mac-group" class="form-group">
-            <label>MAC Address <span style="font-size:11px;color:var(--text-muted);">(optional — Network Discovery matches on it)</span></label>
-            <input type="text" name="mac" id="edit-mac" maxlength="17" class="mono" style="width:100%;"
+            <label>MAC Address <span class="ip-749148">(optional — Network Discovery matches on it)</span></label>
+            <input type="text" name="mac" id="edit-mac" maxlength="17" class="mono ip-046678" 
                    placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off">
         </div>
 
         <div id="edit-owner-group" class="form-group">
-            <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "Lab gear")</span></label>
-            <input type="text" name="owner" id="edit-owner" maxlength="100" style="width:100%;" autocomplete="off">
+            <label>Owner <span class="ip-749148">(e.g. "Matthew", "Lab gear")</span></label>
+            <input type="text" name="owner" id="edit-owner" maxlength="100" class="ip-046678" autocomplete="off">
         </div>
 
         <div class="form-group">
             <label>Notes</label>
             <textarea name="notes" id="edit-notes" rows="3"
-                      style="width:100%;resize:vertical;" placeholder="Any additional notes…"></textarea>
+                      class="ip-a6df03" placeholder="Any additional notes…"></textarea>
         </div>
 
-        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+        <div class="ip-2ba4f9">
             <button type="submit" class="btn btn-primary">Save</button>
             <button type="button" id="edit-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
-            <button type="button" id="edit-clear-btn" class="btn btn-secondary"
-                    style="margin-left:auto;color:var(--danger);">Clear all notes</button>
+            <button type="button" id="edit-clear-btn" class="btn btn-secondary ip-fa6c84"
+>Clear all notes</button>
         </div>
     </form>
 
-    <div id="edit-history" style="margin-top:16px;font-size:12px;color:var(--text-muted);"></div>
+    <div id="edit-history" class="ip-9afaf8"></div>
 </div>
 </div>
 
 <!-- Range Modal -->
 <div id="range-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
      z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
-            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">⇔ Mark a range</h3>
-        <button id="range-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+<div class="ip-12797c">
+    <div class="ip-24c1b8">
+        <h3 class="ip-116966">⇔ Mark a range</h3>
+        <button id="range-modal-close-btn" class="ip-c4d0b1">✕</button>
     </div>
     <form method="POST" action="{{ url_for('ipam.range_action', kind=kind, subnet_id=subnet_id) }}" id="range-form"
           data-confirm="Apply this to every address in the range? Existing labels in the range are replaced.">
@@ -339,7 +395,7 @@
         </div>
         <div class="form-group">
             <label>Action</label>
-            <select name="action" style="width:100%;">
+            <select name="action" class="ip-046678">
                 <option value="planned">◔ Mark Planned</option>
                 <option value="static">● Mark Static</option>
                 <option value="clear">○ Clear every entry in the range</option>
@@ -350,7 +406,7 @@
             <div class="form-group"><label>Label</label><input type="text" name="label" maxlength="100" placeholder="e.g. Cameras"></div>
             <div class="form-group"><label>Owner</label><input type="text" name="owner" maxlength="100"></div>
         </div>
-        <div style="display:flex;gap:10px;margin-top:8px;">
+        <div class="ip-a6b9b8">
             <button type="submit" class="btn btn-primary">Apply</button>
             <button type="button" id="range-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
@@ -361,13 +417,11 @@
 <!-- Import Modal -->
 <div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
      z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
-            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+<div class="ip-12797c">
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">⬆ Import Addresses</h3>
-        <button id="import-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    <div class="ip-24c1b8">
+        <h3 class="ip-116966">{{ icon("upload") }} Import Addresses</h3>
+        <button id="import-modal-close-btn" class="ip-c4d0b1">✕</button>
     </div>
 
     <form method="POST" action="{{ url_for('ipam.import_preview', kind=kind, subnet_id=subnet_id) }}"
@@ -375,7 +429,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Source</label>
-            <select name="import_format" style="width:100%;">
+            <select name="import_format" class="ip-046678">
                 <option value="jen">Jen IPAM export (CSV)</option>
                 <option value="netbox">Netbox — IP Addresses export (CSV)</option>
                 <option value="generic">Other / generic CSV</option>
@@ -388,9 +442,9 @@
         </div>
         <div class="form-group">
             <label>CSV file</label>
-            <input type="file" name="import_file" accept=".csv" required style="width:100%;">
+            <input type="file" name="import_file" accept=".csv" required class="ip-046678">
         </div>
-        <div style="display:flex;gap:10px;margin-top:8px;">
+        <div class="ip-a6b9b8">
             <button type="submit" class="btn btn-primary">Preview Import</button>
             <button type="button" id="import-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
@@ -521,7 +575,7 @@ function loadHistory(ip) {
         .then(function(d) {
             var rows = (d && d.rows) || [];
             if (!rows.length) { box.textContent = 'No history for this address yet.'; return; }
-            var html = '<div style="font-weight:600;margin-bottom:4px;">🕘 History</div>';
+            var html = '<div class="ip-a27006"><svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg> History</div>';
             rows.forEach(function(h) {
                 html += '<div><span class="mono">' + _escape(h.acted_at) + '</span> · ' + _escape(h.action) +
                         (h.label ? ' · ' + _escape(h.label) : '') + (h.owner ? ' · ' + _escape(h.owner) : '') +
@@ -545,7 +599,7 @@ function openEditModal(btn) {
         static:    '● Static',
         planned:   '◔ Planned',
         infrastructure: '◆ ' + (e.label || 'Infrastructure') + ' — from the subnet configuration',
-        conflict:  '⚠ Conflict — designated ' + e.designated + ', but a DHCP client holds this address'
+        conflict:  'Conflict — designated ' + e.designated + ', but a DHCP client holds this address'
     };
     document.getElementById('edit-status-label').textContent = statusLabels[e.status] || e.status;
 
@@ -564,8 +618,8 @@ function openEditModal(btn) {
     var keaInfo = document.getElementById('edit-kea-info');
     var showInfo = isKea && (e.hostname || e.mac || e.device);
     keaInfo.style.display = showInfo ? '' : 'none';
-    document.getElementById('edit-kea-hostname').textContent = e.hostname ? '🖥 ' + e.hostname : '';
-    document.getElementById('edit-kea-mac').textContent = e.mac ? '🔌 ' + e.mac : '';
+    document.getElementById('edit-kea-hostname').textContent = e.hostname ? 'Hostname: ' + e.hostname : '';
+    document.getElementById('edit-kea-mac').textContent = e.mac ? 'MAC: ' + e.mac : '';
     var dev = e.device;
     document.getElementById('edit-kea-device').textContent = dev
         ? ((dev.icon || '') + ' ' + (dev.name || '') + (dev.manufacturer ? ' (' + dev.manufacturer + ')' : '') + (dev.owner ? ' · owner ' + dev.owner : ''))

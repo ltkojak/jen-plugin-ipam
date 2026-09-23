@@ -1,5 +1,41 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.0] - 2026-09-23
+
+### Sprite icons, a rowlist address table, an alert on new conflicts, a JSON API, and a search provider — built on Jen's plugin API v3
+
+Every emoji in the two pages is now a sprite icon via Jen's own
+`icon()` global, and the 187 inline `style="…"` attributes across
+`index.html`, `subnet.html` and `import_preview.html` are gone — moved
+into named classes in a page-local `<style>` block, following the same
+convention Jen's own `tools/extract_inline_styles.py` uses (a Jinja-
+driven width, or a `display:none`/`position:fixed` modal, stays
+inline; everything else doesn't). The subnet detail page's address
+table is now a `rowlist` with `data-m` on every cell, so it degrades
+sanely on a phone instead of forcing horizontal scroll.
+
+A new periodic job checks every Kea subnet every 15 minutes for
+addresses designated static or planned that a DHCP client currently
+holds — a conflict IPAM has always been able to *show*, but never
+raised a finger about. The first time a given address is seen in
+conflict it now sends an alert (a new `ipam_conflict` type, editable
+like any core alert template under Settings → Alerts) and writes an
+event Jen's Timeline and Client Investigation can see; a conflict that
+resolves and later recurs alerts again, the same "new occurrence only"
+rule Network Discovery uses for rogue devices.
+
+Two more things a plugin author asked for: `GET/POST /api/v1/plugins/ipam/entries`
+and `GET /api/v1/plugins/ipam/next-free/<subnet_id>`, authenticated the
+same way Jen's own REST API is, scoped to whatever subnets the calling
+key can see; and IPAM entries now show up in Jen's global search by
+label, owner, IP or hostname, subject to the same subnet access every
+other search result respects.
+
+Requires Jen 5.57.0 (plugin API v3) — the alert-type registry, the
+event bus, the row-action hook (a new "Open in IPAM" action on
+reservation rows), API-key routes, and the search-provider hook all
+shipped there.
+
 ## [1.5.2] - 2026-09-23
 
 ### Viewers were never actually read-only, and an import upload had no size cap

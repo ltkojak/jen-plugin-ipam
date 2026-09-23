@@ -2,9 +2,9 @@
 {% block title %}IPAM Lite{% endblock %}
 {% block content %}
 
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+<div class="page-header ip-1bcfaf">
     <div>
-        <h1>📋 IPAM Lite</h1>
+        <h1>{{ icon("clipboard-list", "ico-lg") }} IPAM Lite</h1>
         <p>IP address space across all subnets.</p>
     </div>
     {% if is_admin %}
@@ -13,36 +13,65 @@
 </div>
 
 {% if ipv6_enabled %}
-<div class="alert alert-info">ℹ️ IPAM Lite tracks IPv4 addresses only. IPv6 subnets aren't shown here — see <a href="/subnets">Subnets</a> for IPv6 lease/reservation counts.</div>
+<div class="alert alert-info">{{ icon("info") }} IPAM Lite tracks IPv4 addresses only. IPv6 subnets aren't shown here — see <a href="/subnets">Subnets</a> for IPv6 lease/reservation counts.</div>
 {% endif %}
 
 <style>
 .ipam-subnet-card { cursor: pointer; transition: border-color .15s; }
 .ipam-subnet-card:hover { border-color: var(--primary); }
+/* v1.6.0 — static declarations moved off individual elements (docs/ui.md's
+   convention: Jinja-driven and display:none/position:fixed values stay
+   inline). No shared stylesheet hook exists for a plugin page (base.html
+   has no extra_css block), so each template carries its own block. */
+.ip-046678{width:100%}
+.ip-116966{margin:0}
+.ip-12797c{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(460px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+.ip-1bcfaf{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.ip-24c1b8{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.ip-31ced1{color:var(--danger);font-weight:600}
+.ip-3325d0{background:var(--surface2);font-size:12px;color:var(--text-muted);margin-top:4px}
+.ip-497726{color:var(--danger)}
+.ip-504614{height:8px;border-radius:4px;background:var(--surface2);display:flex;overflow:hidden;margin-bottom:10px}
+.ip-52df2b{color:var(--warning)}
+.ip-5872de{color:var(--text-muted)}
+.ip-5a4529{color:var(--success)}
+.ip-6414af{color:#8b5cf6}
+.ip-6ae05f{font-weight:600;font-size:14px}
+.ip-749148{font-size:11px;color:var(--text-muted)}
+.ip-7ed833{text-decoration:none;color:inherit}
+.ip-865c33{font-size:12px;color:var(--text-muted)}
+.ip-90505a{text-align:center;color:var(--text-muted);padding:32px}
+.ip-9aa3cd{font-size:20px;font-weight:700;color:var(--primary)}
+.ip-a6b9b8{display:flex;gap:10px;margin-top:8px}
+.ip-a6df03{width:100%;resize:vertical}
+.ip-b8cf4b{font-size:10px;font-weight:600;color:var(--warning);border:1px solid var(--warning);border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em}
+.ip-c4d0b1{background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1}
+.ip-cc366e{display:flex;gap:16px;font-size:11px;flex-wrap:wrap}
+.ip-cd5a1e{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+.ip-dc2e42{color:var(--primary)}
+.ip-f045bb{color:var(--text)}
+.ip-fc84e9{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
 </style>
 
 {% macro subnet_card(kind, subnet_id, info, s, unmanaged=False) %}
 <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id) }}"
-   style="text-decoration:none;color:inherit;">
+   class="ip-7ed833">
 <div class="card ipam-subnet-card">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+    <div class="ip-fc84e9">
         <div>
-            <div style="font-weight:600;font-size:14px;">
+            <div class="ip-6ae05f">
                 {{ info.name }}
                 {% if unmanaged %}
-                <span style="font-size:10px;font-weight:600;color:var(--warning);
-                             border:1px solid var(--warning);border-radius:3px;
-                             padding:1px 5px;margin-left:6px;vertical-align:middle;
-                             text-transform:uppercase;letter-spacing:.04em;">unmanaged</span>
+                <span class="ip-b8cf4b">unmanaged</span>
                 {% endif %}
             </div>
-            <div style="font-size:12px;color:var(--text-muted);">{{ info.cidr }}</div>
+            <div class="ip-865c33">{{ info.cidr }}</div>
         </div>
-        <span style="font-size:20px;font-weight:700;color:var(--primary);">{{ s.pct or 0 }}%</span>
+        <span class="ip-9aa3cd">{{ s.pct or 0 }}%</span>
     </div>
 
     {% if s.total %}
-    <div style="height:8px;border-radius:4px;background:var(--surface2);display:flex;overflow:hidden;margin-bottom:10px;">
+    <div class="ip-504614">
         {% if s.dynamic %}
         <div style="width:{{ (s.dynamic / s.total * 100)|round }}%;background:var(--primary);"></div>
         {% endif %}
@@ -57,43 +86,43 @@
         {% endif %}
     </div>
 
-    <div style="display:flex;gap:16px;font-size:11px;flex-wrap:wrap;">
-        <span style="color:var(--text-muted);">
-            <span style="color:var(--success);">●</span> {{ s.available }} available
+    <div class="ip-cc366e">
+        <span class="ip-5872de">
+            <span class="ip-5a4529">●</span> {{ s.available }} available
         </span>
         {% if not unmanaged %}
-        <span style="color:var(--text-muted);">
-            <span style="color:var(--primary);">●</span> {{ s.dynamic }} dynamic
+        <span class="ip-5872de">
+            <span class="ip-dc2e42">●</span> {{ s.dynamic }} dynamic
         </span>
-        <span style="color:var(--text-muted);">
-            <span style="color:var(--success);">●</span> {{ s.reserved }} reserved
+        <span class="ip-5872de">
+            <span class="ip-5a4529">●</span> {{ s.reserved }} reserved
         </span>
         {% endif %}
-        <span style="color:var(--text-muted);">
-            <span style="color:var(--warning);">●</span> {{ s.static }} static
+        <span class="ip-5872de">
+            <span class="ip-52df2b">●</span> {{ s.static }} static
         </span>
-        <span style="color:var(--text-muted);">
-            <span style="color:#8b5cf6;">●</span> {{ s.planned }} planned
+        <span class="ip-5872de">
+            <span class="ip-6414af">●</span> {{ s.planned }} planned
         </span>
         {% if s.get('infrastructure') %}
-        <span style="color:var(--text-muted);">
-            <span style="color:var(--text-muted);">◆</span> {{ s.infrastructure }} infrastructure
+        <span class="ip-5872de">
+            <span class="ip-5872de">◆</span> {{ s.infrastructure }} infrastructure
         </span>
         {% endif %}
         {% if s.get('conflict') %}
-        <span style="color:var(--danger);font-weight:600;">
-            ⚠ {{ s.conflict }} conflict{{ 's' if s.conflict != 1 else '' }}
+        <span class="ip-31ced1">
+            {{ icon("triangle-alert") }} {{ s.conflict }} conflict{{ 's' if s.conflict != 1 else '' }}
         </span>
         {% endif %}
     </div>
     {% else %}
-    <div style="font-size:12px;color:var(--text-muted);">No data</div>
+    <div class="ip-865c33">No data</div>
     {% endif %}
 </div>
 </a>
 {% endmacro %}
 
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+<div class="ip-cd5a1e">
 {% for subnet_id, info in subnet_map.items() %}
 {{ subnet_card('kea', subnet_id, info, summaries.get(('kea', subnet_id), {})) }}
 {% endfor %}
@@ -103,46 +132,44 @@
 </div>
 
 {% if not subnet_map and not ipam_subnets %}
-<div class="card" style="text-align:center;color:var(--text-muted);padding:32px;">
+<div class="card ip-90505a">
     No subnets available.
 </div>
 {% endif %}
 
-<div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);margin-top:4px;">
-    <strong style="color:var(--text);">Status legend:</strong>
-    &nbsp;<span style="color:var(--primary);">● Dynamic</span> — active DHCP lease
-    &nbsp;·&nbsp;<span style="color:var(--success);">● Reserved</span> — Kea reservation
-    &nbsp;·&nbsp;<span style="color:var(--warning);">● Static</span> — manually designated in IPAM
-    &nbsp;·&nbsp;<span style="color:#8b5cf6;">● Planned</span> — earmarked for future use, not yet a reservation
-    &nbsp;·&nbsp;<span style="color:var(--text-muted);">◆ Infrastructure</span> — gateway, DNS, the Kea and Jen hosts, network/broadcast (from the subnet's own configuration)
-    &nbsp;·&nbsp;<span style="color:var(--danger);">⚠ Conflict</span> — designated static/planned here, but a DHCP client currently holds it
+<div class="card ip-3325d0">
+    <strong class="ip-f045bb">Status legend:</strong>
+    &nbsp;<span class="ip-dc2e42">● Dynamic</span> — active DHCP lease
+    &nbsp;·&nbsp;<span class="ip-5a4529">● Reserved</span> — Kea reservation
+    &nbsp;·&nbsp;<span class="ip-52df2b">● Static</span> — manually designated in IPAM
+    &nbsp;·&nbsp;<span class="ip-6414af">● Planned</span> — earmarked for future use, not yet a reservation
+    &nbsp;·&nbsp;<span class="ip-5872de">◆ Infrastructure</span> — gateway, DNS, the Kea and Jen hosts, network/broadcast (from the subnet's own configuration)
+    &nbsp;·&nbsp;<span class="ip-497726">{{ icon("triangle-alert") }} Conflict</span> — designated static/planned here, but a DHCP client currently holds it
     &nbsp;·&nbsp;Available — no lease, reservation, or designation
-    &nbsp;·&nbsp;<strong style="color:var(--text);">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
+    &nbsp;·&nbsp;<strong class="ip-f045bb">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
 </div>
 
 {% if is_admin %}
 <!-- Add Unmanaged Subnet Modal -->
 <div id="add-subnet-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
      z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-            width:min(460px,94vw);max-height:90vh;overflow-y:auto;
-            padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.6);">
+<div class="ip-12797c">
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">＋ Add Unmanaged Subnet</h3>
-        <button id="ipam-add-subnet-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    <div class="ip-24c1b8">
+        <h3 class="ip-116966">＋ Add Unmanaged Subnet</h3>
+        <button id="ipam-add-subnet-close-btn" class="ip-c4d0b1">✕</button>
     </div>
 
     <form method="POST" action="{{ url_for('ipam.add_subnet') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Name</label>
-            <input type="text" name="name" maxlength="100" style="width:100%;"
+            <input type="text" name="name" maxlength="100" class="ip-046678"
                    placeholder="e.g. Backend Network" required autocomplete="off">
         </div>
         <div class="form-group">
             <label>CIDR</label>
-            <input type="text" name="cidr" style="width:100%;" class="mono"
+            <input type="text" name="cidr"  class="mono ip-046678"
                    placeholder="e.g. 172.16.10.0/24" required autocomplete="off">
             <div class="form-hint">
                 Must not overlap any Kea-managed or existing unmanaged subnet.
@@ -150,15 +177,15 @@
             </div>
         </div>
         <div class="form-group">
-            <label>Gateway <span style="font-size:11px;color:var(--text-muted);">(optional — shown as infrastructure, never "available")</span></label>
-            <input type="text" name="gateway" style="width:100%;" class="mono" placeholder="e.g. 172.16.10.1" autocomplete="off">
+            <label>Gateway <span class="ip-749148">(optional — shown as infrastructure, never "available")</span></label>
+            <input type="text" name="gateway"  class="mono ip-046678" placeholder="e.g. 172.16.10.1" autocomplete="off">
         </div>
         <div class="form-group">
-            <label>Description <span style="font-size:11px;color:var(--text-muted);">(optional)</span></label>
-            <textarea name="description" rows="2" style="width:100%;resize:vertical;"
+            <label>Description <span class="ip-749148">(optional)</span></label>
+            <textarea name="description" rows="2" class="ip-a6df03"
                       placeholder="What lives on this network…"></textarea>
         </div>
-        <div style="display:flex;gap:10px;margin-top:8px;">
+        <div class="ip-a6b9b8">
             <button type="submit" class="btn btn-primary">Add Subnet</button>
             <button type="button" id="ipam-add-subnet-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>

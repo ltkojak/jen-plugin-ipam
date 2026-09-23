@@ -1,11 +1,11 @@
 {
   "id": "ipam",
   "name": "IPAM Lite",
-  "version": "1.5.2",
-  "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Replaces Netbox for simple static IP tracking.",
+  "version": "1.6.0",
+  "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Alerts on new conflicts, a JSON API for entries and next-free, and a global search provider. Replaces Netbox for simple static IP tracking.",
   "author": "Matthew Thibodeau",
-  "requires_jen": "5.34.0",
-  "plugin_api": 1,
+  "requires_jen": "5.57.0",
+  "plugin_api": 3,
   "tags": [
     "ipam",
     "addresses",
@@ -16,7 +16,7 @@
     {
       "section": "network",
       "label": "IPAM",
-      "icon": "📋",
+      "icon": "clipboard-list",
       "endpoint": "ipam.index"
     }
   ],
@@ -35,6 +35,7 @@
     {"version": 12, "description": "entries: entry_status (available/static/planned, v1.4.0)", "sql": "ALTER TABLE ipam_static_entries ADD COLUMN entry_status VARCHAR(20) NULL AFTER is_static"},
     {"version": 13, "description": "entries: backfill entry_status from is_static", "sql": "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"},
     {"version": 14, "description": "history: index (subnet_kind, subnet_id, acted_at) for the per-address and recent-changes views (v1.5.0)", "sql": "ALTER TABLE ipam_assignment_history ADD INDEX idx_hist_kind_subnet_at (subnet_kind, subnet_id, acted_at)"},
-    {"version": 15, "description": "unmanaged subnets: optional gateway, shown as infrastructure (v1.5.0)", "sql": "ALTER TABLE ipam_subnets ADD COLUMN gateway VARCHAR(15) NULL AFTER description"}
+    {"version": 15, "description": "unmanaged subnets: optional gateway, shown as infrastructure (v1.5.0)", "sql": "ALTER TABLE ipam_subnets ADD COLUMN gateway VARCHAR(15) NULL AFTER description"},
+    {"version": 16, "description": "ipam_conflict_state table: tracks which conflicts have already alerted (v1.6.0)", "sql": "CREATE TABLE IF NOT EXISTS ipam_conflict_state (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_kind ENUM('kea','ipam') NOT NULL, subnet_id INT NOT NULL, first_detected DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_conflict (ip, subnet_kind, subnet_id))"}
   ]
 }

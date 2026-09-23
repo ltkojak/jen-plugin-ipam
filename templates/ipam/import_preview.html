@@ -6,32 +6,56 @@
 
 <div class="page-header">
     <div>
-        <h1>⬆ Import Preview — {{ subnet.name }}</h1>
+        <h1>{{ icon("upload", "ico-lg") }} Import Preview — {{ subnet.name }}</h1>
         <p>Source: {{ format_labels.get(import_format, import_format) }} · nothing has been saved yet</p>
     </div>
 </div>
 
-<div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ rows|length }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Ready to import</div>
+<style>
+/* v1.6.0 — static declarations moved off individual elements; see
+   index.html's <style> block for the convention this follows. */
+.ip-01f649{color:var(--primary);font-weight:600}
+.ip-0c69bd{font-size:12px;color:var(--text-muted);flex:1;min-width:200px}
+.ip-41d7d7{padding:0}
+.ip-426a21{font-size:24px;font-weight:700;color:var(--success)}
+.ip-52df2b{color:var(--warning)}
+.ip-5872de{color:var(--text-muted)}
+.ip-5e0faa{font-size:13px}
+.ip-6414af{color:#8b5cf6}
+.ip-6cb285{font-size:12px}
+.ip-749148{font-size:11px;color:var(--text-muted)}
+.ip-865c33{font-size:12px;color:var(--text-muted)}
+.ip-87c136{margin-bottom:16px}
+.ip-8989ee{margin-top:16px;display:flex;gap:10px}
+.ip-90b7fd{font-size:12px;color:var(--text-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ip-91a870{text-align:center}
+.ip-97548f{text-align:center;padding:12px;color:var(--text-muted);font-size:12px}
+.ip-a20aaa{font-size:24px;font-weight:700;color:var(--text-muted)}
+.ip-a3f952{max-height:60vh;overflow-y:auto}
+.ip-f9d823{display:flex;gap:24px;flex-wrap:wrap;align-items:center}
+</style>
+
+<div class="card ip-87c136">
+    <div class="ip-f9d823">
+        <div class="ip-91a870">
+            <div class="ip-426a21">{{ rows|length }}</div>
+            <div class="ip-749148">Ready to import</div>
         </div>
         {% if skipped %}
-        <div style="text-align:center;">
-            <div style="font-size:24px;font-weight:700;color:var(--text-muted);">{{ skipped }}</div>
-            <div style="font-size:11px;color:var(--text-muted);">Skipped (outside {{ subnet.cidr }})</div>
+        <div class="ip-91a870">
+            <div class="ip-a20aaa">{{ skipped }}</div>
+            <div class="ip-749148">Skipped (outside {{ subnet.cidr }})</div>
         </div>
         {% endif %}
-        <div style="font-size:12px;color:var(--text-muted);flex:1;min-width:200px;">
+        <div class="ip-0c69bd">
             Existing entries for the same IP will be overwritten with the imported values.
             Review the rows below, then confirm to save.
         </div>
     </div>
 </div>
 
-<div class="card" style="padding:0;">
-<div class="table-wrap" style="max-height:60vh;overflow-y:auto;">
+<div class="card ip-41d7d7">
+<div class="table-wrap ip-a3f952">
 <table>
     <thead><tr>
         <th>IP Address</th>
@@ -44,31 +68,30 @@
     <tbody>
     {% for entry in rows[:300] %}
     <tr>
-        <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
-        <td style="font-size:12px;">
-            {% if entry.status == 'static' %}<span style="color:var(--warning);">● Static</span>
-            {% elif entry.status == 'planned' %}<span style="color:#8b5cf6;">◔ Planned</span>
-            {% else %}<span style="color:var(--text-muted);">○ Available</span>{% endif %}
+        <td class="mono ip-01f649">{{ entry.ip }}</td>
+        <td class="ip-6cb285">
+            {% if entry.status == 'static' %}<span class="ip-52df2b">● Static</span>
+            {% elif entry.status == 'planned' %}<span class="ip-6414af">◔ Planned</span>
+            {% else %}<span class="ip-5872de">○ Available</span>{% endif %}
         </td>
-        <td style="font-size:13px;">{{ entry.label or entry.hostname or '—' }}</td>
-        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ entry.mac or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ entry.owner or '—' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);max-width:220px;overflow:hidden;
-                   text-overflow:ellipsis;white-space:nowrap;">{{ entry.notes or '—' }}</td>
+        <td class="ip-5e0faa">{{ entry.label or entry.hostname or '—' }}</td>
+        <td class="mono ip-865c33">{{ entry.mac or '—' }}</td>
+        <td class="ip-865c33">{{ entry.owner or '—' }}</td>
+        <td class="ip-90b7fd">{{ entry.notes or '—' }}</td>
     </tr>
     {% endfor %}
     </tbody>
 </table>
 </div>
 {% if rows|length > 300 %}
-<div style="text-align:center;padding:12px;color:var(--text-muted);font-size:12px;">
+<div class="ip-97548f">
     Showing first 300 of {{ rows|length }} rows — all {{ rows|length }} will be imported on confirm.
 </div>
 {% endif %}
 </div>
 
 <form method="POST" action="{{ url_for('ipam.import_commit', kind=kind, subnet_id=subnet_id) }}"
-      style="margin-top:16px;display:flex;gap:10px;">
+      class="ip-8989ee">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="payload" value='{{ payload|e }}'>
     <button type="submit" class="btn btn-primary">Confirm Import ({{ rows|length }})</button>

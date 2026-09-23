@@ -6,16 +6,18 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.30.0 or later (v1.4.x runs on 5.28.2+)
+- [Jen](https://github.com/ltkojak/jen-kea) v5.57.0 or later (v1.5.x runs on 5.34.0+)
 
 ## Features
 
 - **Overview page** — all subnets as cards with stacked utilisation bars (dynamic / reserved / static / planned / infrastructure / conflict / available), counted without enumerating the address space
 - **Unmanaged subnets** — track non-DHCP networks Kea doesn't manage (backend networks, management VLANs, etc.). Admins add them by name + CIDR; addresses support manual hostname and MAC since there's no DHCP to supply them
-- **Subnet detail** — every IP with its current status and annotations; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labelled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on large subnets
-- **✨ Next free** — the first available address outside every DHCP pool, one click
+- **Subnet detail** — every IP with its current status and annotations, as a phone-friendly rowlist; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labelled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on large subnets
+- **Next free** — the first available address outside every DHCP pool, one click
 - **Devices** — a lease's row shows the device Jen knows for that MAC (name, vendor, icon); Owner prefills from it
-- **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease
+- **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease. A periodic check alerts once per new conflict (Settings → Alerts, type "IPAM Conflict") and emits an event for the Timeline
+- **Search + JSON API** — entries show up in Jen's global search by label, owner, IP or hostname; `GET/POST /api/v1/plugins/ipam/entries` and `GET /api/v1/plugins/ipam/next-free/<subnet_id>` for scripting, authenticated with a Jen API key and scoped to whatever subnets it can see
+- **"Open in IPAM"** row action on Jen's own Reservations page, linking straight to that address
 - **Range…** — mark a from–to span planned/static (one label/owner) or clear it; leases and reservations are never overwritten
 - **Edit modal** — context-aware per IP status:
   - Dynamic / Reserved: notes only (Kea controls identity)
