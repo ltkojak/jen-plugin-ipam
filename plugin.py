@@ -45,11 +45,15 @@ _FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Hard cap on unmanaged subnet size: nothing larger than a /16.
 _MAX_PREFIX = 16
-# Above this size the detail page collapses runs of available addresses
-# by default (a /22 is 1,022 rows; a /16 is 65,534).
-_COLLAPSE_PREFIX = 22
+# The detail page collapses runs of available addresses by default at EVERY
+# prefix length up to a /32 (v1.6.1). It used to stop at a /22, so a /24 —
+# the size nearly every subnet is — rendered all 254 rows: 11,337 px tall on
+# a desktop and 33,512 px on a phone, almost all of it empty addresses.
+# `?all=1` and the per-run expand still show everything.
+_COLLAPSE_PREFIX = 32
 # A run of at least this many consecutive available addresses becomes one
-# row on the detail page.
+# row on the detail page; a shorter run is cheaper to show than to summarise,
+# so the floor is what keeps a nearly-full /29 readable.
 _MIN_RUN = 4
 # Range operations (mark/clear a from–to span) are capped per action.
 _RANGE_MAX = 1024
@@ -550,6 +554,12 @@ def _summary(kind, subnet_id, subnet):
     return _count_sets(total, host_in, leases, res, entries, ctx)
 
 
+def _should_collapse(prefixlen, all_arg):
+    """Pure: does the detail page collapse runs of available addresses?
+    Always, unless the caller asked for every address (`?all=1`)."""
+    return all_arg != "1" and prefixlen <= _COLLAPSE_PREFIX
+
+
 def _collapse_runs(space, collapse, expand=None, min_run=_MIN_RUN):
     """Pure: table rows for the detail page. With `collapse`, a run of
     ≥ min_run consecutive available addresses becomes one row
@@ -905,7 +915,7 @@ def subnet_detail(kind, subnet_id):
     open_ip = _extract_ip(request.args.get("ip", ""))
     if open_ip and ipaddress.IPv4Address(open_ip) not in network:
         open_ip = None
-    collapse = request.args.get("all") != "1" and network.prefixlen <= _COLLAPSE_PREFIX
+    collapse = _should_collapse(network.prefixlen, request.args.get("all"))
     expand = _parse_expand(request.args.get("expand", ""), network)
     rows = _collapse_runs(space, collapse, expand)
     if open_ip and not any(not r.get("run") and r["ip"] == open_ip for r in rows):

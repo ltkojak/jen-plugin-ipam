@@ -97,6 +97,22 @@
 .ip-fa6c84{margin-left:auto;color:var(--danger)}
 .ip-fdf20b{padding:12px 16px}
 .ip-ffcb32{font-size:12px;color:var(--danger)}
+
+/* v1.6.1 — the bar segments carry their width as a class (ip-w0 .. ip-w100) instead of a
+   style attribute: the value is computed per render, so the classes are generated here. */
+{% for i in range(101) %}.ip-w{{ i }}{width:{{ i }}%}{% endfor %}
+.ip-seg-dyn{background:var(--primary)}
+.ip-seg-res{background:var(--success)}
+.ip-seg-sta{background:var(--warning)}
+.ip-seg-pla{background:#8b5cf6}
+.ip-seg-inf{background:var(--text-muted)}
+.ip-seg-con{background:var(--danger)}
+.ip-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
+.ip-hidden{display:none}
+.ip-search-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);font-size:16px;cursor:pointer;line-height:1;padding:4px}
+.ip-result-count{font-size:12px;color:var(--text-muted);margin-top:8px}
+.ip-no-results{text-align:center;padding:32px;color:var(--text-muted);font-size:13px}
+.ip-kea-info{background:var(--surface2);border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;font-size:12px}
 </style>
 
 <!-- Summary + filters -->
@@ -137,13 +153,13 @@
         <div class="ip-7b1dd1">
             <div class="ip-30f624">
                 {% if not unmanaged %}
-                <div style="width:{{ (counts.dynamic / space|length * 100)|round }}%;background:var(--primary);"></div>
-                <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
+                <div class="ip-seg ip-seg-dyn ip-w{{ (counts.dynamic / space|length * 100)|round|int }}"></div>
+                <div class="ip-seg ip-seg-res ip-w{{ (counts.reserved / space|length * 100)|round|int }}"></div>
                 {% endif %}
-                <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
-                <div style="width:{{ (counts.planned / space|length * 100)|round }}%;background:#8b5cf6;"></div>
-                <div style="width:{{ (counts.infrastructure / space|length * 100)|round }}%;background:var(--text-muted);"></div>
-                <div style="width:{{ (counts.conflict / space|length * 100)|round }}%;background:var(--danger);"></div>
+                <div class="ip-seg ip-seg-sta ip-w{{ (counts.static / space|length * 100)|round|int }}"></div>
+                <div class="ip-seg ip-seg-pla ip-w{{ (counts.planned / space|length * 100)|round|int }}"></div>
+                <div class="ip-seg ip-seg-inf ip-w{{ (counts.infrastructure / space|length * 100)|round|int }}"></div>
+                <div class="ip-seg ip-seg-con ip-w{{ (counts.conflict / space|length * 100)|round|int }}"></div>
             </div>
             <div class="ip-627512">
                 {{ counts.pct }}% utilised
@@ -157,10 +173,7 @@
                placeholder="Search IP, hostname, label, MAC, owner, device…"
                class="ip-4703c3"
                autocomplete="off">
-        <button id="search-clear" title="Clear search"
-                style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);
-                       background:none;border:none;color:var(--text-muted);font-size:16px;
-                       cursor:pointer;line-height:1;padding:4px;">✕</button>
+        <button id="search-clear" title="Clear search" class="ip-search-clear ip-hidden">✕</button>
     </div>
 
     <!-- Filter tabs -->
@@ -178,7 +191,7 @@
         <button class="btn btn-sm btn-secondary ip-497726" data-filter="conflict">{{ icon("triangle-alert") }} Conflict ({{ counts.conflict }})</button>
         {% endif %}
     </div>
-    <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
+    <div id="result-count" class="ip-result-count ip-hidden"></div>
     {% if collapsed %}
     <div class="ip-8a0402">Runs of available addresses are shown as one row — click a run to expand it, or <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, all=1) }}">show every address</a>.</div>
     {% endif %}
@@ -274,7 +287,7 @@
     </tbody>
 </table>
 </div>
-<div id="no-results" style="display:none;text-align:center;padding:32px;color:var(--text-muted);font-size:13px;">
+<div id="no-results" class="ip-no-results ip-hidden">
     No addresses match your search.
 </div>
 </div>
@@ -295,8 +308,7 @@
 {% endif %}
 
 <!-- Edit Modal -->
-<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:500;align-items:center;justify-content:center;">
+<div id="edit-modal" class="ip-modal">
 <div class="ip-755013">
 
     <div class="ip-24c1b8">
@@ -308,8 +320,7 @@
     </div>
 
     <!-- Read-only Kea / device info for dynamic/reserved/conflict -->
-    <div id="edit-kea-info" style="display:none;background:var(--surface2);border-radius:var(--radius);
-         padding:12px 14px;margin-bottom:16px;font-size:12px;">
+    <div id="edit-kea-info" class="ip-kea-info ip-hidden">
         <div class="ip-7086d3">Kea / Devices (read-only)</div>
         <div id="edit-kea-hostname" class="ip-d44f6d"></div>
         <div id="edit-kea-mac" class="ip-d44f6d"></div>
@@ -379,8 +390,7 @@
 </div>
 
 <!-- Range Modal -->
-<div id="range-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:500;align-items:center;justify-content:center;">
+<div id="range-modal" class="ip-modal">
 <div class="ip-12797c">
     <div class="ip-24c1b8">
         <h3 class="ip-116966">⇔ Mark a range</h3>
@@ -415,8 +425,7 @@
 </div>
 
 <!-- Import Modal -->
-<div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:500;align-items:center;justify-content:center;">
+<div id="import-modal" class="ip-modal">
 <div class="ip-12797c">
 
     <div class="ip-24c1b8">
@@ -454,8 +463,7 @@
 
 <!-- Hidden delete form -->
 <form id="clear-form" method="POST"
-      action="{{ url_for('ipam.delete_entry', kind=kind, subnet_id=subnet_id) }}"
-      style="display:none;">
+      action="{{ url_for('ipam.delete_entry', kind=kind, subnet_id=subnet_id) }}" class="ip-hidden">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="ip" id="clear-ip-input">
 </form>
@@ -463,8 +471,7 @@
 {% if unmanaged and is_admin %}
 <!-- Hidden subnet delete form -->
 <form id="subnet-delete-form" method="POST"
-      action="{{ url_for('ipam.delete_subnet', subnet_id=subnet_id) }}"
-      style="display:none;">
+      action="{{ url_for('ipam.delete_subnet', subnet_id=subnet_id) }}" class="ip-hidden">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 </form>
 {% endif %}
@@ -486,7 +493,7 @@ function filterTable() {
     var input = document.getElementById('ipam-search');
     var q = input.value.toLowerCase().trim();
 
-    document.getElementById('search-clear').style.display = q ? '' : 'none';
+    document.getElementById('search-clear').classList.toggle('ip-hidden', !q);
 
     var rows = document.querySelectorAll('#ipam-table tbody tr');
     var visible = 0;
@@ -503,13 +510,13 @@ function filterTable() {
     var rc = document.getElementById('result-count');
     var total = rows.length;
     if (q || !_currentFilter.has('all')) {
-        rc.style.display = '';
+        rc.classList.remove('ip-hidden');
         rc.textContent = visible + ' of ' + total + ' rows shown';
     } else {
-        rc.style.display = 'none';
+        rc.classList.add('ip-hidden');
     }
 
-    document.getElementById('no-results').style.display = visible === 0 ? '' : 'none';
+    document.getElementById('no-results').classList.toggle('ip-hidden', visible !== 0);
 }
 
 function _syncFilterButtons() {
@@ -617,7 +624,7 @@ function openEditModal(btn) {
 
     var keaInfo = document.getElementById('edit-kea-info');
     var showInfo = isKea && (e.hostname || e.mac || e.device);
-    keaInfo.style.display = showInfo ? '' : 'none';
+    keaInfo.classList.toggle('ip-hidden', !showInfo);
     document.getElementById('edit-kea-hostname').textContent = e.hostname ? 'Hostname: ' + e.hostname : '';
     document.getElementById('edit-kea-mac').textContent = e.mac ? 'MAC: ' + e.mac : '';
     var dev = e.device;

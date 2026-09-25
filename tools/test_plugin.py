@@ -33,6 +33,9 @@ def _stub_modules():
 
             return deco
 
+        def add_url_rule(self, *a, **k):
+            pass
+
     flask.Blueprint = Blueprint
     for name in ("flash", "jsonify", "make_response", "redirect", "render_template", "url_for"):
         setattr(flask, name, lambda *a, **k: None)
@@ -42,6 +45,43 @@ def _stub_modules():
     fl.current_user = types.SimpleNamespace(username="tester", all_subnets=True, role="admin")
     fl.login_required = lambda fn: fn
     sys.modules["flask_login"] = fl
+
+
+class _FakeApp:
+    def register_blueprint(self, bp):
+        pass
+
+
+def _stub_jen_plugin_api():
+    """A stub `jen.plugin_api` sufficient for register(app) to run end to end, enforcing the SAME
+    two rules Jen's real one does: an alert type id must start with '<plugin_id>_', and a periodic job
+    may not run more often than PERIODIC_MIN_MINUTES (5). A plugin that breaks either raises at
+    register() in Jen, is swallowed by its per-plugin error handling, and simply never loads — the
+    exact way watchdog 1.0.0 and dns-sync 1.0.0 shipped dead (Q89). Returns the registered calls."""
+    calls = {"alert_types": [], "periodic": [], "row_actions": [], "search": []}
+
+    def register_alert_type(plugin_id, type_id, **kwargs):
+        prefix = f"{plugin_id}_"
+        if not type_id.startswith(prefix):
+            raise ValueError(f"type_id {type_id!r} must start with {prefix!r}")
+        calls["alert_types"].append(type_id)
+
+    def register_periodic(plugin_id, name, fn, every_minutes):
+        if every_minutes < 5:
+            raise ValueError("every_minutes must be at least 5")
+        calls["periodic"].append((plugin_id, name, every_minutes))
+
+    jen_pkg = types.ModuleType("jen")
+    plugin_api = types.ModuleType("jen.plugin_api")
+    plugin_api.register_alert_type = register_alert_type
+    plugin_api.register_periodic = register_periodic
+    plugin_api.register_row_action = lambda *a, **k: calls["row_actions"].append(a)
+    plugin_api.register_search_provider = lambda *a, **k: calls["search"].append(a)
+    plugin_api.api_key_required = lambda write=False: lambda fn: fn
+    jen_pkg.plugin_api = plugin_api
+    sys.modules["jen"] = jen_pkg
+    sys.modules["jen.plugin_api"] = plugin_api
+    return calls
 
 
 def load_plugin():
@@ -226,6 +266,56 @@ def main():
         all(not r.get("run") for r in p._collapse_runs(small, True)), "a run shorter than the minimum is not collapsed"
     )
 
+    # ── 1.6.1: a run of available addresses collapses at EVERY prefix length ──
+    for prefix in (16, 20, 22, 24, 25, 26, 28, 29, 30):
+        check(p._should_collapse(prefix, None) is True, f"_should_collapse: a /{prefix} collapses by default")
+    check(p._should_collapse(24, "1") is False, "_should_collapse: ?all=1 shows every address of a /24")
+    check(p._should_collapse(24, "0") is True, "_should_collapse: only the literal 1 asks for everything")
+    # a busy /24 — a few leases, a couple of statics — is a handful of rows, not 254
+    busy_leases = {
+        f"10.1.0.{n}": {"hostname": f"h{n}", "mac": f"aa:aa:aa:aa:aa:{n:02x}"} for n in (5, 6, 7, 40, 41, 120)
+    }
+    busy_entries = {
+        "10.1.0.10": {
+            "label": "printer",
+            "owner": "",
+            "notes": "",
+            "hostname": "",
+            "mac": "",
+            "is_static": 1,
+            "entry_status": "static",
+        }
+    }
+    busy = p._compose_space(big_ips, busy_leases, {}, busy_entries, big_ctx)
+    busy_rows = p._collapse_runs(busy, p._should_collapse(24, None))
+    check(
+        len(busy) == 254 and len(busy_rows) <= 20,
+        f"a /24 with 7 occupied addresses renders at most 20 rows (got {len(busy_rows)})",
+    )
+    check(
+        sum(r["count"] for r in busy_rows if r.get("run")) + sum(1 for r in busy_rows if not r.get("run")) == 254,
+        "collapsing loses no address: every one is in a run or a row of its own",
+    )
+    # the 4-address floor: a run of 3 stays as three rows, a run of 4 becomes one
+    floor = (
+        [{"ip": f"10.9.0.{n}", "status": "available", "in_pool": False} for n in (1, 2, 3)]
+        + [{"ip": "10.9.0.4", "status": "static", "in_pool": False}]
+        + [{"ip": f"10.9.0.{n}", "status": "available", "in_pool": False} for n in (5, 6, 7, 8)]
+    )
+    floor_rows = p._collapse_runs(floor, True)
+    check(
+        [bool(r.get("run")) for r in floor_rows] == [False, False, False, False, True],
+        f"the 4-address floor: 3 available stay rows, 4 become one run (got {[bool(r.get('run')) for r in floor_rows]})",
+    )
+    tiny = p._compose_space(
+        ["10.8.0.1", "10.8.0.2", "10.8.0.3", "10.8.0.4", "10.8.0.5", "10.8.0.6"],
+        {},
+        {},
+        {},
+        {"pools": [], "infrastructure": {}},
+    )
+    check(len(p._collapse_runs(tiny, p._should_collapse(29, None))) == 1, "an empty /29 is one run row, not six")
+
     # ── range parsing ────────────────────────────────────────────────────────
     ips24, err = p._range_addresses(big, "10.1.0.10", "10.1.0.12")
     check(ips24 == ["10.1.0.10", "10.1.0.11", "10.1.0.12"] and not err, "range: inclusive span")
@@ -333,6 +423,28 @@ def main():
         check(True, "an upload exactly at the cap is accepted")
     except p._ImportTooLarge:
         check(False, "an upload exactly at the cap is accepted")
+
+    # ── register(): runs end to end against a stub that enforces Jen's rules ──
+    calls = _stub_jen_plugin_api()
+    try:
+        p.register(_FakeApp())
+        registered = True
+    except Exception as e:
+        registered = False
+        print(f"      register() raised: {e}")
+    check(registered, "register(): runs end to end without raising against a real-rule stub")
+    check(
+        calls["alert_types"] == [p._CONFLICT_ALERT_TYPE],
+        "register(): the conflict alert type is registered under the plugin's own prefix",
+    )
+    check(
+        calls["periodic"] == [("ipam", "conflict_check", 15)],
+        f"register(): the conflict check runs every 15 minutes (got {calls['periodic']})",
+    )
+    check(
+        len(calls["row_actions"]) == 1 and len(calls["search"]) == 1,
+        "register(): one row action and one search provider",
+    )
 
     if failures:
         print(f"\n{len(failures)} check(s) failed")

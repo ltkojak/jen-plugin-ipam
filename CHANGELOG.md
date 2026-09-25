@@ -1,5 +1,44 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.1] - 2026-09-25
+
+### Fixed: the subnet page rendered every address of a /24
+
+Runs of available addresses collapsed into one row only on a /22 or larger
+(`_COLLAPSE_PREFIX = 22`), so a /24 — the size nearly every subnet is — drew all
+254 rows. On the CI phone capture that was a page 33,512 px tall (11,337 px on a
+desktop), nearly all of it empty addresses. Runs now collapse at every prefix
+length: a busy /24 with a handful of leases and static entries is around fifteen
+rows. A run of fewer than four available addresses still shows as individual rows
+(a summary row would be longer than the rows it replaces), `?all=1` still shows
+every address, and clicking a run still expands just that run. The decision is one
+small pure function (`_should_collapse`), and the harness now checks it at each
+prefix length, checks that collapsing loses no address, and checks the
+four-address floor.
+
+### Changed
+
+- Every remaining inline `style=` attribute is gone from the three templates. The
+  usage-bar segments carry their width as a class (`ip-w0` … `ip-w100`, generated
+  in the page's own `<style>` block, because the value is computed per render),
+  modals use a class instead of `display:none;position:fixed;…`, and the four
+  elements that start hidden and were shown by setting `style.display = ''` now
+  toggle a class. `tools/verify.py` now fails a template that carries a `style=`
+  attribute, so they cannot drift back.
+- `tools/test_plugin.py` now calls the real `register(app)` against a stub that
+  enforces Jen's two registration rules (an alert type id must start with the
+  plugin's own id, a periodic job may not run more often than every five
+  minutes). Watchdog and DNS Sync shipped unable to load because nothing ever ran
+  `register()`; this harness predates that lesson and now applies it.
+
+### Checked, not changed: the round's authorization pattern
+
+The pattern named across this round's plugin releases — a route authorises on one
+thing (a typed subnet id, or nothing for a by-id POST) and acts on another — is
+not present here: every IPAM route, the JSON API included, checks the subnet it
+acts on, and Jen's authorization matrix covers the plugin's client-facing routes.
+No access rule changed in this release.
+
 ## [1.6.0] - 2026-09-23
 
 ### Sprite icons, a rowlist address table, an alert on new conflicts, a JSON API, and a search provider — built on Jen's plugin API v3

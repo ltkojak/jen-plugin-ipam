@@ -51,6 +51,18 @@
 .ip-dc2e42{color:var(--primary)}
 .ip-f045bb{color:var(--text)}
 .ip-fc84e9{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+
+/* v1.6.1 — the bar segments carry their width as a class (ip-w0 .. ip-w100) instead of a
+   style attribute: the value is computed per render, so the classes are generated here. */
+{% for i in range(101) %}.ip-w{{ i }}{width:{{ i }}%}{% endfor %}
+.ip-seg-dyn{background:var(--primary)}
+.ip-seg-res{background:var(--success)}
+.ip-seg-sta{background:var(--warning)}
+.ip-seg-pla{background:#8b5cf6}
+.ip-seg-inf{background:var(--text-muted)}
+.ip-seg-con{background:var(--danger)}
+.ip-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
+.ip-hidden{display:none}
 </style>
 
 {% macro subnet_card(kind, subnet_id, info, s, unmanaged=False) %}
@@ -73,16 +85,16 @@
     {% if s.total %}
     <div class="ip-504614">
         {% if s.dynamic %}
-        <div style="width:{{ (s.dynamic / s.total * 100)|round }}%;background:var(--primary);"></div>
+        <div class="ip-seg ip-seg-dyn ip-w{{ (s.dynamic / s.total * 100)|round|int }}"></div>
         {% endif %}
         {% if s.reserved %}
-        <div style="width:{{ (s.reserved / s.total * 100)|round }}%;background:var(--success);"></div>
+        <div class="ip-seg ip-seg-res ip-w{{ (s.reserved / s.total * 100)|round|int }}"></div>
         {% endif %}
         {% if s.static %}
-        <div style="width:{{ (s.static / s.total * 100)|round }}%;background:var(--warning);"></div>
+        <div class="ip-seg ip-seg-sta ip-w{{ (s.static / s.total * 100)|round|int }}"></div>
         {% endif %}
         {% if s.planned %}
-        <div style="width:{{ (s.planned / s.total * 100)|round }}%;background:#8b5cf6;"></div>
+        <div class="ip-seg ip-seg-pla ip-w{{ (s.planned / s.total * 100)|round|int }}"></div>
         {% endif %}
     </div>
 
@@ -151,8 +163,7 @@
 
 {% if is_admin %}
 <!-- Add Unmanaged Subnet Modal -->
-<div id="add-subnet-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:500;align-items:center;justify-content:center;">
+<div id="add-subnet-modal" class="ip-modal">
 <div class="ip-12797c">
 
     <div class="ip-24c1b8">

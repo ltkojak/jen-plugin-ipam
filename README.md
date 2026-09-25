@@ -12,7 +12,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 
 - **Overview page** — all subnets as cards with stacked utilisation bars (dynamic / reserved / static / planned / infrastructure / conflict / available), counted without enumerating the address space
 - **Unmanaged subnets** — track non-DHCP networks Kea doesn't manage (backend networks, management VLANs, etc.). Admins add them by name + CIDR; addresses support manual hostname and MAC since there's no DHCP to supply them
-- **Subnet detail** — every IP with its current status and annotations, as a phone-friendly rowlist; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labelled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on large subnets
+- **Subnet detail** — every IP with its current status and annotations, as a phone-friendly rowlist; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labelled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on every subnet (`?all=1` shows them all)
 - **Next free** — the first available address outside every DHCP pool, one click
 - **Devices** — a lease's row shows the device Jen knows for that MAC (name, vendor, icon); Owner prefills from it
 - **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease. A periodic check alerts once per new conflict (Settings → Alerts, type "IPAM Conflict") and emits an event for the Timeline
@@ -39,7 +39,7 @@ To install by hand instead (a checkout without registry access), unzip `plugin.z
 
 ## Development
 
-`python3 tools/verify.py --build` rebuilds `plugin.zip` deterministically from the tree and runs the same checks CI runs on every push and tag: the zip matches the tree byte-for-byte, no template carries an inline event handler or an un-nonce'd `<script>` (Jen's CSP executes neither), `manifest.json`'s version matches the top `CHANGELOG.md` entry, and `plugin.py` compiles and passes ruff. The committed `plugin.zip` is the artifact Jen installs, so rebuild it in the same commit as any change.
+`python3 tools/verify.py --build` rebuilds `plugin.zip` deterministically from the tree and runs the same checks CI runs on every push and tag: the zip matches the tree byte-for-byte, no template carries an inline event handler, an inline `style=` attribute or an un-nonce'd `<script>` (Jen's CSP executes neither of the first and last), `manifest.json`'s version matches the top `CHANGELOG.md` entry, and `plugin.py` compiles and passes ruff. The committed `plugin.zip` is the artifact Jen installs, so rebuild it in the same commit as any change.
 
 ## Version History
 
