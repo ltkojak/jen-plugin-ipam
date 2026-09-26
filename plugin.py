@@ -333,10 +333,23 @@ def _devices_by_mac(macs):
 # ── Address space ─────────────────────────────────────────────────────────────
 
 
-def _load_kea_sets(subnet_id):
-    """(active_leases {ip: {hostname, mac}}, reservations {ip: {hostname, mac, host_id}})."""
+def _load_kea_sets(subnet_id, cidr=None):
+    """(active_leases {ip: {hostname, mac}}, reservations {ip: {hostname, mac, host_id}}).
+
+    An "active lease" is Jen's own definition (client_subject.py): state 0 AND not past its expiry
+    (1.6.3: this used to be state 0 alone, so an expired-but-not-yet-reclaimed lease kept an address
+    "in use"). Reservations are the subnet's own PLUS, when `cidr` is given, every GLOBAL one (a host
+    with no subnet, which Kea applies everywhere) whose fixed address falls inside that subnet: it used
+    to compose as "available", so next-free, the API and the range skip-set handed out an address Kea
+    would never give to anyone else. Network Discovery's `_load_kea` includes them the same way."""
     active_leases = {}
     reservations = {}
+    network = None
+    if cidr:
+        try:
+            network = ipaddress.IPv4Network(cidr, strict=False)
+        except ValueError:
+            network = None
     db = None
     try:
         db = _kea_db()
@@ -347,7 +360,7 @@ def _load_kea_sets(subnet_id):
                        l.hostname,
                        HEX(l.hwaddr) AS mac_hex
                 FROM lease4 l
-                WHERE l.state=0 AND l.subnet_id=%s
+                WHERE l.state=0 AND l.expire > NOW() AND l.subnet_id=%s
             """,
                 (subnet_id,),
             )
@@ -364,15 +377,21 @@ def _load_kea_sets(subnet_id):
                        h.hostname,
                        HEX(h.dhcp_identifier) AS ident_hex,
                        h.dhcp_identifier_type AS ident_type,
-                       h.host_id
+                       h.host_id,
+                       h.dhcp4_subnet_id AS host_subnet_id
                 FROM hosts h
-                WHERE h.dhcp4_subnet_id=%s
+                WHERE (h.dhcp4_subnet_id=%s OR h.dhcp4_subnet_id IS NULL OR h.dhcp4_subnet_id=0)
                   AND h.ipv4_address IS NOT NULL
                   AND h.ipv4_address > 0
             """,
                 (subnet_id,),
             )
             for row in cur.fetchall():
+                if not row["ip"]:
+                    continue
+                is_global = not row.get("host_subnet_id")  # a global reservation counts only where its address falls
+                if is_global and (network is None or ipaddress.IPv4Address(row["ip"]) not in network):
+                    continue
                 reservations[row["ip"]] = {
                     "hostname": row["hostname"] or "",
                     "mac": _format_identifier(row["ident_hex"], row["ident_type"]),
@@ -408,6 +427,23 @@ def _load_entries(db_kind, subnet_id):
         if db:
             db.close()
     return ipam_entries
+
+
+def _designation_blocker(ip, status, leases, reservations, existing):
+    """Pure: why `ip` cannot be newly marked static/planned, or "". A Kea reservation or a live lease
+    already owns the address, and range_action already skips those; the single-entry form and the API
+    used to accept it and the page then showed a conflict nobody meant to create. An address that is
+    ALREADY designated stays editable (its label or notes), so a conflict that arose the other way
+    round - the lease came after the entry - can still be worked on."""
+    if status not in _DESIGNATED:
+        return ""
+    if existing and _designated_status(existing) in _DESIGNATED:
+        return ""
+    if ip in reservations:
+        return f"{ip} is a Kea reservation, so it cannot also be marked {status}."
+    if ip in leases:
+        return f"{ip} is held by a DHCP lease right now, so it cannot be marked {status} until the lease ends."
+    return ""
 
 
 def _designated_status(entry_row):
@@ -488,7 +524,7 @@ def _build_address_space(kind, subnet_id, cidr, ctx=None, subnet=None):
     db_kind = _KIND_DB[kind]
     if ctx is None:
         ctx = _subnet_ctx(kind, subnet_id, subnet or {"cidr": cidr})
-    active_leases, reservations = _load_kea_sets(subnet_id) if kind == "kea" else ({}, {})
+    active_leases, reservations = _load_kea_sets(subnet_id, cidr) if kind == "kea" else ({}, {})
     ipam_entries = _load_entries(db_kind, subnet_id)
     devices = {}
     if kind == "kea":
@@ -500,7 +536,7 @@ def _build_address_space(kind, subnet_id, cidr, ctx=None, subnet=None):
 def _count_sets(total_hosts, host_ips_in, active_leases, reservations, ipam_entries, ctx):
     """Pure set arithmetic — the overview never enumerates the address
     space (v1.5.0; the old count built every host of every subnet)."""
-    res = set(reservations)
+    res = {ip for ip in reservations if host_ips_in(ip)}  # a global reservation elsewhere is not this subnet's
     leases = set(active_leases)
     designated = {ip for ip, r in ipam_entries.items() if _designated_status(r) in _DESIGNATED}
     infra = {ip for ip in ctx.get("infrastructure", {}) if host_ips_in(ip)}
@@ -541,17 +577,18 @@ def _summary(kind, subnet_id, subnet):
     network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
     total = max(network.num_addresses - (2 if network.prefixlen < 31 else 0), 0)
     ctx = _subnet_ctx(kind, subnet_id, subnet)
-    leases, res = _load_kea_sets(subnet_id) if kind == "kea" else ({}, {})
+    leases, res = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
     entries = _load_entries(_KIND_DB[kind], subnet_id)
+    return _count_sets(total, lambda ip: _host_in_network(network, ip), leases, res, entries, ctx)
 
-    def host_in(ip):
-        try:
-            a = ipaddress.IPv4Address(ip)
-        except ValueError:
-            return False
-        return a in network and a not in (network.network_address, network.broadcast_address)
 
-    return _count_sets(total, host_in, leases, res, entries, ctx)
+def _host_in_network(network, ip):
+    """Is `ip` a host address of `network` (not the network or broadcast address)?"""
+    try:
+        a = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return False
+    return a in network and a not in (network.network_address, network.broadcast_address)
 
 
 def _should_collapse(prefixlen, all_arg):
@@ -630,14 +667,16 @@ def _all_kea_subnets():
     return subnet_map()
 
 
-def _check_access(kind, subnet_id):
-    """Access + existence check. Returns subnet info dict, or None if denied/missing."""
+def _check_access(kind, subnet_id, notify=True):
+    """Access + existence check. Returns subnet info dict, or None if denied/missing. `notify=False`
+    for a JSON route: a flash queued on an answer that is not a page shows on the NEXT page load."""
     if kind not in _KIND_DB:
         return None
     if kind == "kea" and not _assert_kea_access(subnet_id):
         return None
     if kind == "u" and not _can_see_unmanaged():
-        flash("You do not have access to unmanaged subnets.", "error")
+        if notify:
+            flash("You do not have access to unmanaged subnets.", "error")
         return None
     return _get_subnet(kind, subnet_id)
 
@@ -1043,7 +1082,7 @@ def export_csv(kind, subnet_id):
 @login_required
 def history(kind, subnet_id):
     """JSON (the edit modal's History section) or CSV (`?format=csv`)."""
-    subnet = _check_access(kind, subnet_id)
+    subnet = _check_access(kind, subnet_id, notify=False)
     if subnet is None:
         return jsonify({"error": "not found"}), 404
     db_kind = _KIND_DB[kind]
@@ -1329,6 +1368,13 @@ def save_entry(kind, subnet_id):
         flash("Invalid MAC address format.", "error")
         return redirect(detail_url)
 
+    if kind == "kea" and ipam_status in _DESIGNATED:
+        leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"])
+        blocked = _designation_blocker(ip, ipam_status, leases_now, res_now, _load_entries(db_kind, subnet_id).get(ip))
+        if blocked:
+            flash(blocked, "error")
+            return redirect(detail_url)
+
     # Status set back to available with nothing else filled in — clear the entry.
     if ipam_status == "available" and not label and not owner and not notes and not hostname and not mac:
         db = None
@@ -1468,7 +1514,7 @@ def range_action(kind, subnet_id):
     # Never overwrite a reservation's or a live lease's address silently.
     skipped = set()
     if kind == "kea" and action != "clear":
-        leases, res = _load_kea_sets(subnet_id)
+        leases, res = _load_kea_sets(subnet_id, subnet["cidr"])
         skipped = (set(leases) | set(res)) & set(ips)
         ips = [ip for ip in ips if ip not in skipped]
 
@@ -1607,6 +1653,10 @@ def delete_subnet(subnet_id):
             """,
                 (subnet_id,),
             )
+            cur.execute(
+                "DELETE FROM ipam_assignment_history WHERE subnet_kind='ipam' AND subnet_id=%s",
+                (subnet_id,),
+            )
             cur.execute("DELETE FROM ipam_subnets WHERE id=%s", (subnet_id,))
         db.commit()
         flash(f"Unmanaged subnet {subnet['name']} ({subnet['cidr']}) and its entries deleted.", "success")
@@ -1630,23 +1680,48 @@ _CONFLICT_TEMPLATE = (
 )
 
 
+def _conflicts_in(leases, reservations, entries, in_subnet):
+    """Pure set arithmetic: the conflicts of ONE subnet, [{ip, designated, hostname, mac}] in address
+    order. A conflict is an address with a live lease, no reservation and a static/planned entry:
+    (leases - reservations) & designated - the same rule _compose_space applies per address."""
+    out = []
+    for ip in sorted(set(leases) - set(reservations), key=lambda a: tuple(int(x) for x in a.split("."))):
+        entry = entries.get(ip)
+        if not entry or _designated_status(entry) not in _DESIGNATED or not in_subnet(ip):
+            continue
+        out.append(
+            {
+                "ip": ip,
+                "designated": _designated_status(entry),
+                "hostname": leases[ip]["hostname"] or entry.get("hostname") or "",
+                "mac": leases[ip]["mac"] or entry.get("mac") or "",
+            }
+        )
+    return out
+
+
 def _kea_conflicts():
     """(subnet_id, subnet_info, entry) for every conflict across every Kea
     subnet Jen knows — unrestricted, for the periodic job (no current_user
     in a background thread). Unmanaged subnets never produce a conflict:
-    _build_address_space only loads Kea leases for kind='kea'."""
+    they have no Kea leases.
+
+    1.6.3: this built the whole address space of every subnet every fifteen minutes (65,534 dicts for a
+    /16) and ran one `devices` query per lease and reservation MAC, though the check never reads a
+    device. It is now the two Kea sets and the entries of each subnet and a set intersection."""
     from jen.plugin_api import subnet_map
 
     out = []
     for sid, info in subnet_map().items():
         try:
-            space = _build_address_space("kea", sid, info["cidr"], subnet=info)
+            network = ipaddress.IPv4Network(info["cidr"], strict=False)
+            leases, res = _load_kea_sets(sid, info["cidr"])
+            entries = _load_entries("kea", sid)
         except Exception as e:
             logger.error(f"IPAM: conflict scan failed for subnet {sid}: {e}")
             continue
-        for entry in space:
-            if entry["status"] == "conflict":
-                out.append((sid, info, entry))
+        for entry in _conflicts_in(leases, res, entries, lambda ip, n=network: _host_in_network(n, ip)):
+            out.append((sid, info, entry))
     return out
 
 
@@ -1703,6 +1778,13 @@ def _check_conflicts():
 # ── Search provider (v1.6.0, plugin API v3) ───────────────────────────────────
 
 
+def _like_pattern(text):
+    """`%text%` for a LIKE with the user's own `%`, `_` and backslash taken literally: a search for
+    `10.0_1` used to match `10.0x1`, and a lone `%` matched every entry."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _ipam_search(query, accessible_subnet_ids, all_subnets):
     """register_search_provider callback. Only kea-kind entries are
     returned: an unmanaged subnet's id is a separate numbering space from
@@ -1712,7 +1794,7 @@ def _ipam_search(query, accessible_subnet_ids, all_subnets):
     q = (query or "").strip()
     if not q:
         return []
-    like = f"%{q}%"
+    like = _like_pattern(q)
     out = []
     db = None
     try:
@@ -1721,7 +1803,7 @@ def _ipam_search(query, accessible_subnet_ids, all_subnets):
             cur.execute(
                 """
                 SELECT ip, subnet_kind, subnet_id, label, owner, hostname, mac FROM ipam_static_entries
-                WHERE (label LIKE %s OR owner LIKE %s OR ip LIKE %s OR hostname LIKE %s)
+                WHERE subnet_kind='kea' AND (label LIKE %s OR owner LIKE %s OR ip LIKE %s OR hostname LIKE %s)
                 ORDER BY updated_at DESC LIMIT 20
             """,
                 (like, like, like, like),
@@ -1754,12 +1836,26 @@ def _ipam_search(query, accessible_subnet_ids, all_subnets):
 api_bp = Blueprint("ipam_api", __name__, url_prefix="/api/v1/plugins/ipam")
 
 
-def _api_subnet_ok(subnet_id):
+def _api_subnet(subnet_id):
+    """(subnet, None) for a subnet this key may use, else (None, (response, status)).
+
+    1.6.0-1.6.2 resolved the subnet through `_accessible_subnets()`, which asks the LOGGED-IN user
+    (`current_user.filter_subnet_map`); a Bearer request has Flask-Login's anonymous user, which has no
+    such method, so every call the key WAS allowed to make raised and answered 500 - only the refusal
+    path ever worked, and it is the only one the tests exercised. The key's own scope decides
+    (`api_key_can_access_subnet`, a missing scope = unrestricted, a scoped key only its subnets) and the
+    unfiltered map supplies the CIDR. The access check runs first, so a scoped key gets the same 403
+    for a subnet that does not exist as for one it may not see."""
     from flask import g
 
-    from jen.plugin_api import filter_subnet_ids
+    from jen.plugin_api import api_key_can_access_subnet, subnet_map
 
-    return subnet_id in filter_subnet_ids(g.api_key, [subnet_id])
+    if not api_key_can_access_subnet(g.api_key, subnet_id):
+        return None, (jsonify({"error": "subnet not accessible to this key"}), 403)
+    subnet = subnet_map().get(subnet_id)
+    if subnet is None:
+        return None, (jsonify({"error": "not found"}), 404)
+    return subnet, None
 
 
 def _api_list_entries():
@@ -1767,11 +1863,9 @@ def _api_list_entries():
         subnet_id = int(request.args.get("subnet_id", ""))
     except (TypeError, ValueError):
         return jsonify({"error": "subnet_id is required"}), 400
-    if not _api_subnet_ok(subnet_id):
-        return jsonify({"error": "subnet not accessible to this key"}), 403
-    subnet = _accessible_subnets().get(subnet_id)
-    if subnet is None:
-        return jsonify({"error": "not found"}), 404
+    subnet, refused = _api_subnet(subnet_id)
+    if refused:
+        return refused
     entries = _load_entries("kea", subnet_id)
     return jsonify(
         {
@@ -1800,11 +1894,9 @@ def _api_save_entry():
         subnet_id = int(body.get("subnet_id"))
     except (TypeError, ValueError):
         return jsonify({"error": "subnet_id is required"}), 400
-    if not _api_subnet_ok(subnet_id):
-        return jsonify({"error": "subnet not accessible to this key"}), 403
-    subnet = _accessible_subnets().get(subnet_id)
-    if subnet is None:
-        return jsonify({"error": "not found"}), 404
+    subnet, refused = _api_subnet(subnet_id)
+    if refused:
+        return refused
 
     ip = str(body.get("ip", "")).strip()
     try:
@@ -1818,6 +1910,10 @@ def _api_save_entry():
     status = body.get("status", "static")
     if status not in _DESIGNATED:
         status = "static"
+    leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"])
+    blocked = _designation_blocker(ip, status, leases_now, res_now, _load_entries("kea", subnet_id).get(ip))
+    if blocked:
+        return jsonify({"error": blocked}), 409
     label = str(body.get("label", "") or "")[:100]
     owner = str(body.get("owner", "") or "")[:100]
     notes = str(body.get("notes", "") or "")
@@ -1842,11 +1938,9 @@ def _api_save_entry():
 
 
 def _api_next_free(subnet_id):
-    if not _api_subnet_ok(subnet_id):
-        return jsonify({"error": "subnet not accessible to this key"}), 403
-    subnet = _accessible_subnets().get(subnet_id)
-    if subnet is None:
-        return jsonify({"error": "not found"}), 404
+    subnet, refused = _api_subnet(subnet_id)
+    if refused:
+        return refused
     space = _build_address_space("kea", subnet_id, subnet["cidr"], subnet=subnet)
     return jsonify({"ip": _next_free(space)})
 

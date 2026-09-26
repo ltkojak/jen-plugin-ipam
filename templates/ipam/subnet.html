@@ -733,7 +733,7 @@ document.addEventListener('keydown', function(e) {
 {% if status_filter == 'all' %}
 setFilterAll();
 {% else %}
-_currentFilter = new Set(['{{ status_filter }}']);
+_currentFilter = new Set([{{ status_filter|tojson }}]);
 _syncFilterButtons();
 filterTable();
 {% endif %}

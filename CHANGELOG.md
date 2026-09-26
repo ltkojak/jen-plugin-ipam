@@ -1,5 +1,68 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.3] - 2026-09-26
+
+The recurring pattern of this round, named as in every plugin release: a route decides access on one
+thing and then acts on another. This release is the first deep audit of this plugin, and its main finding
+is the opposite shape, a check that was correct and a lookup beside it that was not.
+
+### Fixed: the JSON API answered every allowed call with a server error
+
+`GET /api/v1/plugins/ipam/entries`, `POST /api/v1/plugins/ipam/entries` and `GET
+/api/v1/plugins/ipam/next-free/<subnet_id>` (all added in 1.6.0) looked the subnet up through the same helper
+the pages use, which asks the *logged-in user* which subnets they may see. A request carrying only a Bearer
+key has no logged-in user, so for every subnet the key was allowed to use the call raised and Jen answered
+500. Only the refusal path, a 403 for a subnet outside the key's scope, ever worked, and it runs before the
+lookup, so it was the only thing anyone had tested. The API now decides access with the key's own scope
+(`api_key_can_access_subnet`; a key with no scope reaches every subnet, a scoped key only its own, a missing
+key nothing) and takes the subnet's address range from Jen's unfiltered subnet map. A scoped key still gets
+the same 403 for a subnet that does not exist as for one it may not see. If you scripted against this API in
+1.6.0 to 1.6.2 and gave up on it, it works now. The plugin's own check no longer patches the access helper
+out of the way: it calls the three routes with no session at all, as the API is called, and expects answers.
+Because it now uses `api_key_can_access_subnet`, the plugin requires Jen 5.65.2.
+
+### Fixed: an address that only a global reservation holds could be handed out
+
+Kea can hold a reservation that belongs to no subnet (a global one) and applies wherever its fixed address
+falls. The plugin read reservations per subnet only, so a global reservation's address showed as available,
+and "next free", the API, the range operations' skip list and the utilisation counts treated it as free. It
+is now read with the subnet's own reservations, kept only when its address is inside the subnet, and a global
+reservation in some other subnet is not counted in this one's total. "Active lease" now means what Jen means
+everywhere else, state 0 and not yet expired; it used to be state 0 alone.
+
+### Changed: the conflict check no longer builds every address of every subnet
+
+Every fifteen minutes the conflict job composed the full address table of each Kea subnet (65,534 rows for a
+/16) and asked the devices table about each lease and reservation MAC one at a time, although the check never
+reads a device. A conflict is an address with a live lease, no reservation and a static or planned entry, so it
+is now set arithmetic over the two Kea sets and the subnet's entries. It finds the same conflicts as the page
+does (the harness checks the two agree) and asks the database for a handful of rows per subnet.
+
+### Fixed: smaller findings from the same audit
+
+- Marking an address static or planned when a DHCP lease or a Kea reservation already holds it is now refused
+  with a message, in the edit form and in the API (409). The range action already skipped such addresses; the
+  single-entry paths accepted them and the page then showed a conflict nobody had meant to create. An address
+  that is already designated stays editable, so a conflict that arose the other way round can still be worked on.
+- Deleting an unmanaged subnet also deletes its assignment history; the rows were left behind with nothing
+  pointing at them.
+- The per-address history endpoint flashed "You do not have access" and then answered 404 as JSON, so the
+  message appeared on the next page the person opened. JSON routes no longer queue a flash.
+- The global search treated `%` and `_` in the query as wildcards (a search for `10.0_1` matched `10.0x1`, and a
+  lone `%` matched everything). They are literal now, and only Kea-subnet entries are selected in the query,
+  where they used to be filtered after a limit of twenty.
+- The status filter on the address page is written into its script with `|tojson`, not as bare text.
+- The overview's hint no longer says the detail page collapses runs only above a /22; it has done so on every
+  subnet since 1.6.1.
+
+### Changed
+
+- `tools/test_plugin.py` calls the API routes with no session and an unrestricted key and expects answers,
+  checks a scoped key, a missing key and an unknown subnet, reads the Kea sets from a fake connection (global
+  reservations in and out of the subnet, the expiry condition), and compares the conflict arithmetic with the
+  per-address composition. Its stub `jen.plugin_api` now carries a faithful `api_key_can_access_subnet`.
+- `tools/verify.py` fails a template that has a POST form with no `csrf_token`, the check Jen's own tests make.
+
 ## [1.6.2] - 2026-09-25
 
 ### Fixed: creating and deleting unmanaged subnets was open to any admin

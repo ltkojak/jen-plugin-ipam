@@ -59,6 +59,18 @@ def _stub_jen_plugin_api():
     register() in Jen, is swallowed by its per-plugin error handling, and simply never loads — the
     exact way watchdog 1.0.0 and dns-sync 1.0.0 shipped dead (Q89). Returns the registered calls."""
     calls = {"alert_types": [], "periodic": [], "row_actions": [], "search": []}
+    subnets = {5: {"name": "n", "cidr": "10.5.0.0/24"}}
+
+    def api_key_can_access_subnet(key, subnet_id, *, allow_unattributed=False):
+        """Jen's own rule: a missing key is False; no scope is unrestricted; a scoped key its subnets."""
+        if not key:
+            return False
+        scope = key.get("subnet_access")
+        if scope is None:
+            return True
+        if subnet_id is None:
+            return allow_unattributed
+        return subnet_id in scope
 
     def register_alert_type(plugin_id, type_id, **kwargs):
         prefix = f"{plugin_id}_"
@@ -78,6 +90,9 @@ def _stub_jen_plugin_api():
     plugin_api.register_row_action = lambda *a, **k: calls["row_actions"].append(a)
     plugin_api.register_search_provider = lambda *a, **k: calls["search"].append(a)
     plugin_api.api_key_required = lambda write=False: lambda fn: fn
+    plugin_api.subnet_map = lambda: subnets
+    plugin_api.api_key_can_access_subnet = api_key_can_access_subnet
+    calls["subnets"] = subnets
     jen_pkg.plugin_api = plugin_api
     sys.modules["jen"] = jen_pkg
     sys.modules["jen.plugin_api"] = plugin_api
@@ -428,6 +443,7 @@ def main():
     class FakeDB:
         def __init__(self):
             self.statements = []
+            self.sql = []
 
         def cursor(self):
             return self
@@ -440,6 +456,7 @@ def main():
 
         def execute(self, sql, params=()):
             self.statements.append((sql.split()[0].upper(), params))
+            self.sql.append(" ".join(sql.split()))
 
         def commit(self):
             pass
@@ -506,13 +523,82 @@ def main():
     p._jen_db = lambda: fdb
     p.delete_subnet(4)
     check(any(s[0] == "DELETE" for s in fdb.statements), "delete_subnet: an unrestricted admin can delete one")
+    check(
+        any("DELETE FROM ipam_assignment_history" in s and "'ipam'" in s for s in fdb.sql),
+        "delete_subnet: the subnet's assignment history goes with it (1.6.3)",
+    )
+
+    # ── 1.6.3: the JSON API, positive path, with NO session ──────────────────
+    # The 1.6.2 check patched `_api_subnet_ok` away, so it never noticed that every ALLOWED call
+    # raised: the API asked the logged-in user for the subnet map, and a Bearer request has none.
+    # Here `_accessible_subnets` raises exactly as Jen's does for an anonymous user, the stub
+    # plugin_api supplies the two unfiltered helpers the API must use, and the calls must SUCCEED.
+    _stub_jen_plugin_api()
+    _real_load_kea_sets = p._load_kea_sets
+
+    def _no_session():
+        raise AttributeError("'AnonymousUserMixin' object has no attribute 'filter_subnet_map'")
+
+    p.jsonify = lambda payload: payload
+    p._accessible_subnets = _no_session
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    p._load_entries = lambda kind, sid: {"10.5.0.20": {"label": "NAS", "entry_status": "static", "is_static": 1}}
+    unrestricted = {"name": "k", "subnet_access": None}
+    sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted)
+    p.request = types.SimpleNamespace(args={"subnet_id": "5"})
+    result = p._api_list_entries()
+    check(
+        isinstance(result, dict)
+        and result.get("subnet_id") == 5
+        and [e["ip"] for e in result["entries"]] == ["10.5.0.20"],
+        f"API list entries: an allowed key gets its answer with no session (got {result})",
+    )
+    result = p._api_next_free(5)
+    check(result == {"ip": "10.5.0.1"}, f"API next-free: an allowed key gets an address with no session (got {result})")
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {"10.5.0.1": {"hostname": "", "mac": "", "host_id": 1}})
+    check(
+        p._api_next_free(5) == {"ip": "10.5.0.2"},
+        "API next-free: a reservation (a global one included) is never handed out",
+    )
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    p.request = types.SimpleNamespace(get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"})
+    result = p._api_save_entry()
+    check(
+        isinstance(result, dict) and result.get("ok") is True and any(s[0] == "INSERT" for s in fdb.statements),
+        f"API save: an allowed key saves an entry with no session (got {result})",
+    )
+    p._load_kea_sets = lambda sid, cidr=None: ({"10.5.0.7": {"hostname": "h", "mac": "aa:aa:aa:aa:aa:07"}}, {})
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    result = p._api_save_entry()
+    check(
+        isinstance(result, tuple) and result[1] == 409 and fdb.statements == [],
+        f"API save: an address a lease holds cannot be newly designated (got {result})",
+    )
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    sys.modules["flask"].g = types.SimpleNamespace(api_key={"name": "k", "subnet_access": [1]})
+    result = p._api_next_free(5)
+    check(isinstance(result, tuple) and result[1] == 403, "API: a key scoped to another subnet is refused (403)")
+    result = p._api_next_free(77)
+    check(
+        isinstance(result, tuple) and result[1] == 403,
+        "API: a scoped key gets the same 403 for a subnet that does not exist",
+    )
+    sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted)
+    result = p._api_next_free(77)
+    check(
+        isinstance(result, tuple) and result[1] == 404,
+        "API: an unrestricted key gets 404 for a subnet that does not exist",
+    )
+    sys.modules["flask"].g = types.SimpleNamespace(api_key=None)
+    result = p._api_next_free(5)
+    check(isinstance(result, tuple) and result[1] == 403, "API: a missing key fails closed")
+    sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted)
 
     # ── 1.6.2: the API does not return a raw database error ──────────────────
-    p.jsonify = lambda payload: payload
-    sys.modules["flask"].g = types.SimpleNamespace(api_key={"name": "k"})
     p.request = types.SimpleNamespace(get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"})
-    p._api_subnet_ok = lambda sid: True
-    p._accessible_subnets = lambda: {5: {"name": "n", "cidr": "10.5.0.0/24"}}
     p._jen_db = lambda: (_ for _ in ()).throw(RuntimeError("Access denied marker-xyz"))
     result = p._api_save_entry()
     check(
@@ -520,6 +606,156 @@ def main():
         f"_api_save_entry: a database failure returns a generic 500, not the exception text (got {result})",
     )
     p.current_user.role = "admin"
+
+    # ── 1.6.3: global reservations, unexpired leases, conflicts as set arithmetic ─
+    class KeaDB:
+        def __init__(self, leases, hosts):
+            self.leases, self.hosts, self.sql, self.last = leases, hosts, [], ""
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            self.last = " ".join(sql.split())
+            self.sql.append(self.last)
+
+        def fetchall(self):
+            return self.leases if "FROM lease4" in self.last else self.hosts
+
+        def close(self):
+            pass
+
+    kdb = KeaDB(
+        [{"ip": "10.5.0.30", "hostname": "lap", "mac_hex": "AABBCCDDEE01"}],
+        [
+            {
+                "ip": "10.5.0.9",
+                "hostname": "own",
+                "ident_hex": "AABBCCDDEE02",
+                "ident_type": 0,
+                "host_id": 1,
+                "host_subnet_id": 5,
+            },
+            {
+                "ip": "10.5.0.10",
+                "hostname": "glob-in",
+                "ident_hex": "AABBCCDDEE03",
+                "ident_type": 0,
+                "host_id": 2,
+                "host_subnet_id": None,
+            },
+            {
+                "ip": "10.5.0.11",
+                "hostname": "glob-zero",
+                "ident_hex": "AABBCCDDEE04",
+                "ident_type": 0,
+                "host_id": 3,
+                "host_subnet_id": 0,
+            },
+            {
+                "ip": "10.99.0.1",
+                "hostname": "glob-out",
+                "ident_hex": "AABBCCDDEE05",
+                "ident_type": 0,
+                "host_id": 4,
+                "host_subnet_id": None,
+            },
+        ],
+    )
+    p._kea_db = lambda: kdb
+    real_load = _real_load_kea_sets
+    leases_out, res_out = real_load(5, "10.5.0.0/24")
+    check(
+        sorted(res_out) == ["10.5.0.10", "10.5.0.11", "10.5.0.9"],
+        f"_load_kea_sets: global reservations inside the subnet count, one outside it does not (got {sorted(res_out)})",
+    )
+    check(
+        any("l.expire > NOW()" in s for s in kdb.sql) and any("dhcp4_subnet_id IS NULL" in s for s in kdb.sql),
+        "_load_kea_sets: a lease must be unexpired, and the reservation query includes subnet-less hosts",
+    )
+    check(list(leases_out) == ["10.5.0.30"], "_load_kea_sets: the subnet's own lease is returned")
+    check(
+        sorted(real_load(5)[1]) == ["10.5.0.9"],
+        "_load_kea_sets: with no CIDR a global reservation cannot be placed, so none is included",
+    )
+    check(
+        real_load(5, "not-a-cidr")[1].keys() == {"10.5.0.9"},
+        "_load_kea_sets: an unparseable CIDR is treated as none",
+    )
+    net5 = ipaddress.IPv4Network("10.5.0.0/24")
+    counts = p._count_sets(254, lambda ip: p._host_in_network(net5, ip), {}, res_out | {"10.99.0.1": {}}, {}, {})
+    check(
+        counts["reserved"] == 3,
+        f"_count_sets: a global reservation elsewhere is not this subnet's (got {counts['reserved']})",
+    )
+
+    lz = {
+        "10.5.0.20": {"hostname": "", "mac": "aa:aa:aa:aa:aa:20"},
+        "10.5.0.21": {"hostname": "res", "mac": "aa:aa:aa:aa:aa:21"},
+        "10.5.0.22": {"hostname": "plain", "mac": "aa:aa:aa:aa:aa:22"},
+        "10.6.0.5": {"hostname": "off", "mac": "aa:aa:aa:aa:aa:23"},
+    }
+    rz = {"10.5.0.21": {"hostname": "res", "mac": "", "host_id": 9}}
+    ez = {
+        "10.5.0.20": {"entry_status": "static", "is_static": 1, "hostname": "nas", "mac": ""},
+        "10.5.0.21": {"entry_status": "static", "is_static": 1},
+        "10.5.0.22": {"entry_status": "available", "is_static": 0},
+        "10.6.0.5": {"entry_status": "planned", "is_static": 0},
+    }
+    found = p._conflicts_in(lz, rz, ez, lambda ip: p._host_in_network(net5, ip))
+    check(
+        [c["ip"] for c in found] == ["10.5.0.20"]
+        and found[0]["designated"] == "static"
+        and found[0]["hostname"] == "nas",
+        f"_conflicts_in: (leases - reservations) & designated, in the subnet only (got {found})",
+    )
+    # the same answer the per-address composition gives
+    space_z = p._compose_space([str(h) for h in net5.hosts()], lz, rz, ez, {"infrastructure": {}})
+    check(
+        [e["ip"] for e in space_z if e["status"] == "conflict"] == [c["ip"] for c in found],
+        "_conflicts_in agrees with _compose_space's conflict status",
+    )
+    devices_asked = []
+    p._devices_by_mac = lambda macs: devices_asked.append(macs) or {}
+    p._load_kea_sets = lambda sid, cidr=None: (lz, rz)
+    p._load_entries = lambda kind, sid: ez
+    p._build_address_space = lambda *a, **k: (_ for _ in ()).throw(AssertionError("the whole space was built"))
+    sys.modules["jen.plugin_api"].subnet_map = lambda: {5: {"name": "n", "cidr": "10.5.0.0/24"}}
+    got = p._kea_conflicts()
+    check(
+        [(sid, e["ip"]) for sid, _info, e in got] == [(5, "10.5.0.20")] and devices_asked == [],
+        "_kea_conflicts: no address space is built and no device is looked up (1.6.3)",
+    )
+
+    # ── 1.6.3: designating an address a lease or reservation holds ───────────
+    blk = p._designation_blocker
+    check(blk("10.5.0.21", "static", lz, rz, None) != "", "designation: a Kea reservation blocks a new static entry")
+    check(blk("10.5.0.22", "planned", lz, rz, None) != "", "designation: a live lease blocks a new planned entry")
+    check(blk("10.5.0.22", "available", lz, rz, None) == "", "designation: a plain annotation is never blocked")
+    check(blk("10.5.0.99", "static", lz, rz, None) == "", "designation: a free address is fine")
+    check(
+        blk("10.5.0.20", "static", lz, rz, ez["10.5.0.20"]) == "",
+        "designation: an address ALREADY designated stays editable (a conflict can be worked on)",
+    )
+
+    # ── 1.6.3: JSON routes do not flash; the search takes % and _ literally ──
+    flashed.clear()
+    p.current_user.all_subnets = False
+    check(
+        p._check_access("u", 4, notify=False) is None and flashed == [],
+        "_check_access(notify=False): denied without a flash",
+    )
+    check(p._check_access("u", 4) is None and len(flashed) == 1, "_check_access: a page route still flashes")
+    p.current_user.all_subnets = True
+    check(p._like_pattern("10.0_1") == "%10.0\\_1%", "search: an underscore is literal")
+    check(p._like_pattern("50%") == "%50\\%%", "search: a percent sign is literal")
+    check(p._like_pattern("a\\b") == "%a\\\\b%", "search: a backslash is literal")
 
     # ── register(): runs end to end against a stub that enforces Jen's rules ──
     calls = _stub_jen_plugin_api()
