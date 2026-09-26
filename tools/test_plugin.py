@@ -424,6 +424,103 @@ def main():
     except p._ImportTooLarge:
         check(False, "an upload exactly at the cap is accepted")
 
+    # ── 1.6.2: unmanaged subnets are a global object ─────────────────────────
+    class FakeDB:
+        def __init__(self):
+            self.statements = []
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            self.statements.append((sql.split()[0].upper(), params))
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    flashed = []
+    p.flash = lambda msg, cat="message": flashed.append(msg)
+    p.redirect = lambda where: "redirect"
+    p.url_for = lambda *a, **k: "/x"
+    p._audit = lambda *a, **k: None
+    for role, all_subnets, expect in (
+        ("admin", False, False),
+        ("admin", True, True),
+        ("viewer", True, False),
+        ("superadmin", True, True),
+    ):
+        p.current_user.role = role
+        p.current_user.all_subnets = all_subnets
+        check(
+            p._can_manage_unmanaged() is expect,
+            f"_can_manage_unmanaged: a {role} with all_subnets={all_subnets} -> {expect}",
+        )
+
+    hidden_kea = {9: {"name": "HIDDEN-KEA", "cidr": "10.9.0.0/24"}}
+    p._accessible_subnets = dict  # the caller can see no Kea subnet at all
+    p._all_kea_subnets = lambda: hidden_kea
+    p._get_ipam_subnets = lambda: {4: {"name": "HIDDEN-U", "cidr": "10.4.0.0/24"}}
+    p.current_user.role = "admin"
+    p.current_user.all_subnets = False  # a subnet-scoped admin
+    p.request = types.SimpleNamespace(form={"name": "x", "cidr": "10.20.0.0/24"}, args={})
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    p.add_subnet()
+    check(fdb.statements == [], "add_subnet: a subnet-scoped admin is refused, nothing stored")
+    p.request = types.SimpleNamespace(form={}, args={})
+    p.delete_subnet(4)
+    check(fdb.statements == [], "delete_subnet: a subnet-scoped admin cannot delete an unmanaged subnet by id")
+    check(
+        all("HIDDEN" not in m and "10.4.0.0" not in m for m in flashed),
+        "the refusals name no hidden subnet or CIDR",
+    )
+    p.current_user.all_subnets = True  # an unrestricted admin
+    flashed.clear()
+    p.request = types.SimpleNamespace(form={"name": "x", "cidr": "10.9.0.128/25"}, args={})
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    p.add_subnet()
+    check(
+        fdb.statements == [] and any("HIDDEN-KEA" in m for m in flashed),
+        "add_subnet: the overlap check runs over EVERY Kea subnet, not the caller's own (an unrestricted admin sees the hit)",
+    )
+    flashed.clear()
+    p.request = types.SimpleNamespace(form={"name": "x", "cidr": "10.20.0.0/24"}, args={})
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    p.add_subnet()
+    check(
+        any(s[0] == "INSERT" for s in fdb.statements),
+        "add_subnet: an unrestricted admin can add a non-overlapping unmanaged subnet",
+    )
+    fdb = FakeDB()
+    p._jen_db = lambda: fdb
+    p.delete_subnet(4)
+    check(any(s[0] == "DELETE" for s in fdb.statements), "delete_subnet: an unrestricted admin can delete one")
+
+    # ── 1.6.2: the API does not return a raw database error ──────────────────
+    p.jsonify = lambda payload: payload
+    sys.modules["flask"].g = types.SimpleNamespace(api_key={"name": "k"})
+    p.request = types.SimpleNamespace(get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"})
+    p._api_subnet_ok = lambda sid: True
+    p._accessible_subnets = lambda: {5: {"name": "n", "cidr": "10.5.0.0/24"}}
+    p._jen_db = lambda: (_ for _ in ()).throw(RuntimeError("Access denied marker-xyz"))
+    result = p._api_save_entry()
+    check(
+        isinstance(result, tuple) and result[1] == 500 and "marker-xyz" not in str(result[0]),
+        f"_api_save_entry: a database failure returns a generic 500, not the exception text (got {result})",
+    )
+    p.current_user.role = "admin"
+
     # ── register(): runs end to end against a stub that enforces Jen's rules ──
     calls = _stub_jen_plugin_api()
     try:

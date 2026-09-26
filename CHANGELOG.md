@@ -1,5 +1,19 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.2] - 2026-09-25
+
+### Fixed: creating and deleting unmanaged subnets was open to any admin
+
+An unmanaged subnet belongs to no Kea subnet, so who can *see* one is decided by whether the account can see every subnet, while who could *create* or *delete* one was decided by "is an admin" alone. A subnet-scoped admin could therefore add unmanaged subnets they would never be able to see, delete one by a guessed id, and read the names and CIDRs of hidden unmanaged subnets out of the overlap messages. Because the overlap check against Kea subnets ran over the caller's *own* subnets only, they could also create an unmanaged network overlapping a Kea subnet they cannot access. Adding and deleting an unmanaged subnet, and the "Add Unmanaged Subnet" button, now need an administrator who can see every subnet, and the overlap checks run over every Kea subnet Jen knows. The pattern this round names in every plugin: a route authorises on one thing (an "admin" role) and acts on another (an object the caller is not allowed to see).
+
+### Fixed: raw exception text reached the browser and the API
+
+A failed save, import, range action or subnet change put the database's own error message into the page, and the JSON API's entry save returned it in the response body. The details are now written to Jen's log and the caller gets a generic message. (A too-large upload still says so: that message is written for the user, not taken from an exception.)
+
+### Changed
+
+- `tools/test_plugin.py` now runs the add and delete routes with a subnet-scoped admin and an unrestricted one, checks the overlap runs over the full Kea map and that the refusal names nothing hidden, and checks the API's failure response.
+
 ## [1.6.1] - 2026-09-25
 
 ### Fixed: the subnet page rendered every address of a /24

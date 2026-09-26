@@ -614,6 +614,22 @@ def _can_see_unmanaged():
     return bool(getattr(current_user, "all_subnets", False))
 
 
+def _can_manage_unmanaged():
+    """Creating or deleting an unmanaged subnet: an admin who can also SEE unmanaged subnets
+    (an unrestricted account). An unmanaged subnet belongs to no Kea subnet, so it is a global
+    object: a scoped admin used to be able to create ones they could never see, delete one by a
+    guessed id, and read hidden subnets' names and CIDRs out of the overlap messages."""
+    return _is_admin() and _can_see_unmanaged()
+
+
+def _all_kea_subnets():
+    """EVERY Kea subnet Jen knows, not just the caller's: an overlap check against the caller's own
+    subnets alone let an unmanaged network overlap a Kea subnet they cannot access."""
+    from jen.plugin_api import subnet_map
+
+    return subnet_map()
+
+
 def _check_access(kind, subnet_id):
     """Access + existence check. Returns subnet info dict, or None if denied/missing."""
     if kind not in _KIND_DB:
@@ -870,7 +886,12 @@ def index():
             summaries[("u", sid)] = {}
 
     return render_template(
-        "ipam/index.html", subnet_map=subnet_map, ipam_subnets=ipam_subnets, summaries=summaries, is_admin=_is_admin()
+        "ipam/index.html",
+        subnet_map=subnet_map,
+        ipam_subnets=ipam_subnets,
+        summaries=summaries,
+        is_admin=_is_admin(),
+        can_manage_unmanaged=_can_manage_unmanaged(),
     )
 
 
@@ -1083,7 +1104,8 @@ def import_preview(kind, subnet_id):
         flash(str(e), "error")
         return redirect(detail_url)
     except Exception as e:
-        flash(f"Could not read CSV: {e}", "error")
+        logger.error(f"IPAM: could not read an uploaded CSV: {e}")
+        flash("Could not read that CSV file.", "error")
         return redirect(detail_url)
 
     if not raw_rows:
@@ -1245,7 +1267,8 @@ def import_commit(kind, subnet_id):
         else:
             flash("Nothing was imported — all rows were rejected.", "error")
     except Exception as e:
-        flash(f"Import failed: {e}", "error")
+        logger.error(f"IPAM: import failed: {e}")
+        flash("Import failed; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1323,7 +1346,8 @@ def save_entry(kind, subnet_id):
             db.commit()
             flash(f"Entry for {ip} cleared.", "success")
         except Exception as e:
-            flash(f"Error clearing entry: {e}", "error")
+            logger.error(f"IPAM: error clearing entry: {e}")
+            flash("Could not clear the entry; the details are in Jen's log.", "error")
         finally:
             if db:
                 db.close()
@@ -1341,7 +1365,8 @@ def save_entry(kind, subnet_id):
         flash(f"Entry saved for {ip}.", "success")
         _audit("IPAM_ENTRY", ip, f"kind={db_kind} subnet={subnet_id} label={label} owner={owner} status={ipam_status}")
     except Exception as e:
-        flash(f"Error saving entry: {e}", "error")
+        logger.error(f"IPAM: error saving entry: {e}")
+        flash("Could not save the entry; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1385,7 +1410,8 @@ def delete_entry(kind, subnet_id):
         flash(f"Entry for {ip} removed.", "success")
         _audit("IPAM_DELETE", ip, f"kind={db_kind} subnet={subnet_id} entry removed")
     except Exception as e:
-        flash(f"Error removing entry: {e}", "error")
+        logger.error(f"IPAM: error removing entry: {e}")
+        flash("Could not remove the entry; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1470,7 +1496,8 @@ def range_action(kind, subnet_id):
         flash(msg, "success")
         _audit("IPAM_RANGE", subnet["cidr"], f"kind={db_kind} subnet={subnet_id} action={action} count={done}")
     except Exception as e:
-        flash(f"Range action failed: {e}", "error")
+        logger.error(f"IPAM: range action failed: {e}")
+        flash("The range action failed; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1483,8 +1510,8 @@ def range_action(kind, subnet_id):
 @bp.route("/subnets/add", methods=["POST"])
 @login_required
 def add_subnet():
-    if not _is_admin():
-        flash("Only administrators can add unmanaged subnets.", "error")
+    if not _can_manage_unmanaged():
+        flash("Only an administrator with access to every subnet can add unmanaged subnets.", "error")
         return redirect(url_for("ipam.index"))
 
     name = request.form.get("name", "").strip()[:100]
@@ -1517,7 +1544,7 @@ def add_subnet():
     cidr = str(network)
 
     # Reject overlap with Kea-managed subnets and existing unmanaged subnets.
-    for _sid, info in _accessible_subnets().items():
+    for _sid, info in _all_kea_subnets().items():
         try:
             if network.overlaps(ipaddress.IPv4Network(info["cidr"], strict=False)):
                 flash(f"{cidr} overlaps Kea-managed subnet {info['name']} ({info['cidr']}).", "error")
@@ -1548,7 +1575,8 @@ def add_subnet():
         flash(f"Unmanaged subnet {name} ({cidr}) added.", "success")
         _audit("IPAM_SUBNET_ADD", cidr, f"name={name} gateway={gateway}")
     except Exception as e:
-        flash(f"Error adding subnet: {e}", "error")
+        logger.error(f"IPAM: error adding subnet: {e}")
+        flash("Could not add the subnet; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1559,8 +1587,8 @@ def add_subnet():
 @bp.route("/subnets/<int:subnet_id>/delete", methods=["POST"])
 @login_required
 def delete_subnet(subnet_id):
-    if not _is_admin():
-        flash("Only administrators can delete unmanaged subnets.", "error")
+    if not _can_manage_unmanaged():
+        flash("Only an administrator with access to every subnet can delete unmanaged subnets.", "error")
         return redirect(url_for("ipam.index"))
 
     subnet = _get_ipam_subnets().get(subnet_id)
@@ -1584,7 +1612,8 @@ def delete_subnet(subnet_id):
         flash(f"Unmanaged subnet {subnet['name']} ({subnet['cidr']}) and its entries deleted.", "success")
         _audit("IPAM_SUBNET_DELETE", subnet["cidr"], f"name={subnet['name']}")
     except Exception as e:
-        flash(f"Error deleting subnet: {e}", "error")
+        logger.error(f"IPAM: error deleting subnet: {e}")
+        flash("Could not delete the subnet; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -1804,7 +1833,8 @@ def _api_save_entry():
             _record_history(cur, ip, "kea", subnet_id, status, label, owner, actor=actor)
         db.commit()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"IPAM: API entry save failed: {e}")
+        return jsonify({"error": "could not save the entry"}), 500
     finally:
         if db:
             db.close()

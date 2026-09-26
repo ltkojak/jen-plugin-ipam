@@ -7,7 +7,7 @@
         <h1>{{ icon("clipboard-list", "ico-lg") }} IPAM Lite</h1>
         <p>IP address space across all subnets.</p>
     </div>
-    {% if is_admin %}
+    {% if can_manage_unmanaged %}
     <button id="ipam-add-subnet-btn" class="btn btn-primary">＋ Add Unmanaged Subnet</button>
     {% endif %}
 </div>
@@ -161,7 +161,7 @@
     &nbsp;·&nbsp;<strong class="ip-f045bb">Unmanaged</strong> — subnet tracked in IPAM only, no DHCP
 </div>
 
-{% if is_admin %}
+{% if can_manage_unmanaged %}
 <!-- Add Unmanaged Subnet Modal -->
 <div id="add-subnet-modal" class="ip-modal">
 <div class="ip-12797c">
