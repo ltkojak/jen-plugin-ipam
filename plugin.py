@@ -24,7 +24,18 @@ import logging
 import os as _os
 import re
 
-from flask import Blueprint, flash, jsonify, make_response, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    flash,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    stream_with_context,
+    url_for,
+)
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
@@ -40,7 +51,6 @@ bp = Blueprint(
 # URL kind → DB kind. 'kea' = Kea-managed subnet, 'u' = unmanaged (IPAM-only).
 _KIND_DB = {"kea": "kea", "u": "ipam"}
 
-_MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 _FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Hard cap on unmanaged subnet size: nothing larger than a /16.
@@ -55,6 +65,8 @@ _COLLAPSE_PREFIX = 32
 # row on the detail page; a shorter run is cheaper to show than to summarise,
 # so the floor is what keeps a nearly-full /29 readable.
 _MIN_RUN = 4
+# ?all=1 (every address, uncollapsed) is refused above this size (v1.6.4): a /16 is 65,534 rows.
+_MAX_ALL_PREFIX = 22
 # Range operations (mark/clear a from–to span) are capped per action.
 _RANGE_MAX = 1024
 
@@ -127,10 +139,10 @@ def _accessible_subnets():
     return get_accessible_subnet_map()
 
 
-def _assert_kea_access(subnet_id):
+def _assert_kea_access(subnet_id, notify=True):
     from jen.plugin_api import assert_subnet_access
 
-    return assert_subnet_access(subnet_id)
+    return assert_subnet_access(subnet_id, notify=notify)
 
 
 def _is_admin():
@@ -185,14 +197,17 @@ def _safe_row(values):
 
 
 def _normalize_mac(raw):
-    """Normalize a user-entered MAC to lowercase colon format, or '' / None on failure."""
+    """'' for no MAC given, the lowercase MAC for a valid one, None for garbled input.
+
+    v1.6.4 — delegates to plugin_api's normalize_mac(), which returns None for BOTH a blank and a
+    garbled value (a plugin route asking "is this a real MAC" has no reason to treat them
+    differently); this wrapper keeps IPAM's own "blank is fine, garbage is an error" distinction so
+    every existing call site is unchanged."""
     if not raw:
         return ""
-    cleaned = re.sub(r"[^0-9a-fA-F]", "", raw).lower()
-    if len(cleaned) != 12:
-        return None
-    mac = ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
-    return mac if _MAC_RE.match(mac) else None
+    from jen.plugin_api import normalize_mac
+
+    return normalize_mac(raw)
 
 
 def _format_identifier(hex_str, ident_type):
@@ -451,65 +466,69 @@ def _designated_status(entry_row):
     return s if s in _DESIGNATED else "available"
 
 
-def _compose_space(all_ips, active_leases, reservations, ipam_entries, ctx, devices=None):
-    """Pure: the per-address entries. Precedence: reservation > lease
-    (a designated entry under a lease is a *conflict*, not silently
-    'dynamic') > infrastructure > static/planned > available."""
-    devices = devices or {}
+def _compose_entry(ip, active_leases, reservations, ipam_entries, ctx, devices):
+    """Pure: ONE address's entry. Precedence: reservation > lease (a designated entry under a lease
+    is a *conflict*, not silently 'dynamic') > infrastructure > static/planned > available.
+
+    v1.6.4 — factored out of `_compose_space` so the CSV export and the collapsed detail view can
+    build a single address's row without materialising the whole subnet first."""
     infra = ctx.get("infrastructure", {})
-    space = []
-    for ip in all_ips:
-        entry = {
-            "ip": ip,
-            "hostname": "",
-            "mac": "",
-            "label": "",
-            "owner": "",
-            "notes": "",
-            "host_id": None,
-            "status": "available",
-            "designated": "",
-            "infra": "",
-            "in_pool": _in_pool(ctx, ip),
-            "device": None,
-        }
-        s = ipam_entries.get(ip)
-        if s:
-            entry["label"] = s.get("label") or ""
-            entry["owner"] = s.get("owner") or ""
-            entry["notes"] = s.get("notes") or ""
-            entry["hostname"] = s.get("hostname") or ""
-            entry["mac"] = s.get("mac") or ""
-            entry["designated"] = _designated_status(s)
+    entry = {
+        "ip": ip,
+        "hostname": "",
+        "mac": "",
+        "label": "",
+        "owner": "",
+        "notes": "",
+        "host_id": None,
+        "status": "available",
+        "designated": "",
+        "infra": "",
+        "in_pool": _in_pool(ctx, ip),
+        "device": None,
+    }
+    s = ipam_entries.get(ip)
+    if s:
+        entry["label"] = s.get("label") or ""
+        entry["owner"] = s.get("owner") or ""
+        entry["notes"] = s.get("notes") or ""
+        entry["hostname"] = s.get("hostname") or ""
+        entry["mac"] = s.get("mac") or ""
+        entry["designated"] = _designated_status(s)
 
-        if ip in reservations:
-            r = reservations[ip]
-            entry["status"] = "reserved"
-            entry["host_id"] = r["host_id"]
-            entry["hostname"] = r["hostname"] or entry["hostname"]
-            entry["mac"] = r["mac"] or entry["mac"]
-            if ip in active_leases:
-                entry["hostname"] = entry["hostname"] or active_leases[ip]["hostname"]
-                entry["mac"] = entry["mac"] or active_leases[ip]["mac"]
-        elif ip in active_leases:
-            lease = active_leases[ip]
-            # v1.5.0 — a designated static/planned address that a DHCP client
-            # is now using is a conflict, not a lease that "wins".
-            entry["status"] = "conflict" if entry["designated"] in _DESIGNATED else "dynamic"
-            entry["hostname"] = lease["hostname"] or entry["hostname"]
-            entry["mac"] = lease["mac"] or entry["mac"]
-        elif ip in infra:
-            entry["status"] = "infrastructure"
-            entry["infra"] = infra[ip]
-            if not entry["label"]:
-                entry["label"] = _INFRA_LABELS.get(infra[ip], infra[ip])
-        elif entry["designated"] in _DESIGNATED:
-            entry["status"] = entry["designated"]
+    if ip in reservations:
+        r = reservations[ip]
+        entry["status"] = "reserved"
+        entry["host_id"] = r["host_id"]
+        entry["hostname"] = r["hostname"] or entry["hostname"]
+        entry["mac"] = r["mac"] or entry["mac"]
+        if ip in active_leases:
+            entry["hostname"] = entry["hostname"] or active_leases[ip]["hostname"]
+            entry["mac"] = entry["mac"] or active_leases[ip]["mac"]
+    elif ip in active_leases:
+        lease = active_leases[ip]
+        # v1.5.0 — a designated static/planned address that a DHCP client
+        # is now using is a conflict, not a lease that "wins".
+        entry["status"] = "conflict" if entry["designated"] in _DESIGNATED else "dynamic"
+        entry["hostname"] = lease["hostname"] or entry["hostname"]
+        entry["mac"] = lease["mac"] or entry["mac"]
+    elif ip in infra:
+        entry["status"] = "infrastructure"
+        entry["infra"] = infra[ip]
+        if not entry["label"]:
+            entry["label"] = _INFRA_LABELS.get(infra[ip], infra[ip])
+    elif entry["designated"] in _DESIGNATED:
+        entry["status"] = entry["designated"]
 
-        if entry["mac"] and entry["mac"] in devices:
-            entry["device"] = devices[entry["mac"]]
-        space.append(entry)
-    return space
+    if entry["mac"] and entry["mac"] in devices:
+        entry["device"] = devices[entry["mac"]]
+    return entry
+
+
+def _compose_space(all_ips, active_leases, reservations, ipam_entries, ctx, devices=None):
+    """Pure: the per-address entries, in the order given. See `_compose_entry` for the rule per address."""
+    devices = devices or {}
+    return [_compose_entry(ip, active_leases, reservations, ipam_entries, ctx, devices) for ip in all_ips]
 
 
 def _build_address_space(kind, subnet_id, cidr, ctx=None, subnet=None):
@@ -635,11 +654,98 @@ def _collapse_runs(space, collapse, expand=None, min_run=_MIN_RUN):
 
 
 def _next_free(space):
-    """The first available address outside every pool — what Netbox was
-    being used for. None when there isn't one."""
+    """The first available address outside every pool, from an ALREADY-BUILT space. Kept for the
+    ?all=1 path, which already has one; the default path uses `_next_free_lazy` below."""
     for e in space:
         if e["status"] == "available" and not e["in_pool"]:
             return e["ip"]
+    return None
+
+
+def _occupied_addresses(active_leases, reservations, ipam_entries, ctx):
+    """Every address that will NOT be a plain 'available' row: a lease, a reservation, an
+    infrastructure address, or any ipam_static_entries row (even an 'available'-status one, since it
+    may carry a label or a note worth showing on its own line)."""
+    return set(active_leases) | set(reservations) | set(ctx.get("infrastructure", {})) | set(ipam_entries)
+
+
+def _run_boundaries(network, ctx, occupied):
+    """Pure: the sorted address values (as ints) where a collapsed run's state — occupied or
+    available, in a pool or not — can change: the network's own host bounds, each occupied address
+    (and the one after it, since a single occupied address always breaks a run), and each pool's
+    start and one-past-its-end. Consecutive boundaries bracket a half-open run `[a, b)` that is
+    either exactly one occupied address (b == a + 1) or a uniform available/in-pool stretch."""
+    lo = int(network.network_address) + (1 if network.prefixlen < 31 else 0)
+    hi = int(network.broadcast_address) - (1 if network.prefixlen < 31 else 0)
+    points = {lo, hi + 1}
+    for ip in occupied:
+        try:
+            v = int(ipaddress.IPv4Address(ip))
+        except ValueError:
+            continue
+        if lo <= v <= hi:
+            points.add(v)
+            points.add(v + 1)
+    for first, last, _t in ctx.get("pools", []):
+        if last < lo or first > hi:
+            continue
+        points.add(max(first, lo))
+        points.add(min(last, hi) + 1)
+    return sorted(p for p in points if lo <= p <= hi + 1)
+
+
+def _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=None, min_run=_MIN_RUN):
+    """Pure: the SAME rows `_collapse_runs(_compose_space(...), collapse=True, expand, min_run)` would
+    give for this subnet, without ever materialising the full address list. Every occupied address
+    (`_occupied_addresses`) becomes its own entry row via `_compose_entry`; the address ranges between
+    them collapse into run rows (or, when shorter than `min_run`, individual 'available' rows) exactly
+    as the old builder did — `_run_boundaries` guarantees no boundary interval mixes occupied and
+    available addresses, or two different in_pool states."""
+    occupied = _occupied_addresses(active_leases, reservations, ipam_entries, ctx)
+    bounds = _run_boundaries(network, ctx, occupied)
+    rows = []
+    for a, b in zip(bounds, bounds[1:], strict=False):
+        length = b - a
+        first_ip = str(ipaddress.IPv4Address(a))
+        if length == 1 and first_ip in occupied:
+            rows.append(_compose_entry(first_ip, active_leases, reservations, ipam_entries, ctx, devices))
+            continue
+        in_pool = _in_pool(ctx, first_ip)
+        if length < min_run:
+            rows.extend(
+                _compose_entry(str(ipaddress.IPv4Address(v)), active_leases, reservations, ipam_entries, ctx, devices)
+                for v in range(a, b)
+            )
+            continue
+        last_ip = str(ipaddress.IPv4Address(b - 1))
+        key = f"{first_ip}-{last_ip}"
+        if expand == key:
+            rows.extend(
+                _compose_entry(str(ipaddress.IPv4Address(v)), active_leases, reservations, ipam_entries, ctx, devices)
+                for v in range(a, b)
+            )
+        else:
+            rows.append(
+                {"run": True, "first": first_ip, "last": last_ip, "count": length, "in_pool": in_pool, "key": key}
+            )
+    return rows
+
+
+def _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx):
+    """The first available address outside every pool, walking `network.hosts()` lazily and stopping
+    at the first miss — what `_next_free(_build_address_space(...))` did after materialising every
+    address of the subnet first; a /16 cost ~60 MB and roughly a second per request for this alone."""
+    infra = ctx.get("infrastructure", {})
+    for host in network.hosts():
+        ip = str(host)
+        if ip in reservations or ip in active_leases or ip in infra:
+            continue
+        entry = ipam_entries.get(ip)
+        if entry and _designated_status(entry) in _DESIGNATED:
+            continue
+        if _in_pool(ctx, ip):
+            continue
+        return ip
     return None
 
 
@@ -667,12 +773,22 @@ def _all_kea_subnets():
     return subnet_map()
 
 
+def _oversized_kea_subnet(kind, network):
+    """v1.6.4 — a Kea subnet bigger than `_MAX_PREFIX` (the same cap `add_subnet` already enforces
+    for unmanaged ones) still hit `_build_address_space`'s full materialisation on every detail view,
+    export and next-free call; those routes now refuse it the same way an oversized unmanaged one
+    already was refused at creation."""
+    return kind == "kea" and network.prefixlen < _MAX_PREFIX
+
+
 def _check_access(kind, subnet_id, notify=True):
     """Access + existence check. Returns subnet info dict, or None if denied/missing. `notify=False`
     for a JSON route: a flash queued on an answer that is not a page shows on the NEXT page load."""
     if kind not in _KIND_DB:
         return None
-    if kind == "kea" and not _assert_kea_access(subnet_id):
+    if kind == "kea" and not _assert_kea_access(subnet_id, notify=notify):
+        # v1.6.4 - the JSON history route asks for notify=False and used to get it anyway: the kea
+        # branch never looked at `notify` before this, so a flash was queued for the next page.
         return None
     if kind == "u" and not _can_see_unmanaged():
         if notify:
@@ -960,11 +1076,24 @@ def subnet_detail(kind, subnet_id):
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
         return redirect(url_for("ipam.index"))
+    try:
+        network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    except ValueError:
+        flash("Subnet CIDR is invalid.", "error")
+        return redirect(url_for("ipam.index"))
+    if _oversized_kea_subnet(kind, network):
+        flash(f"{subnet['cidr']} is larger than a /{_MAX_PREFIX} — IPAM does not show subnets this size.", "error")
+        return redirect(url_for("ipam.index"))
 
-    network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
     ctx = _subnet_ctx(kind, subnet_id, subnet)
-    space = _build_address_space(kind, subnet_id, subnet["cidr"], ctx=ctx, subnet=subnet)
-    counts = _count_space(space)
+    db_kind = _KIND_DB[kind]
+    active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
+    ipam_entries = _load_entries(db_kind, subnet_id)
+    devices = {}
+    if kind == "kea":
+        macs = {v["mac"] for v in active_leases.values()} | {v["mac"] for v in reservations.values()}
+        devices = _devices_by_mac(sorted(m for m in macs if m))
+
     status_filter = request.args.get("filter", "all")
     if status_filter not in ("all", *_ALL_STATUSES):
         status_filter = "all"
@@ -975,29 +1104,54 @@ def subnet_detail(kind, subnet_id):
     open_ip = _extract_ip(request.args.get("ip", ""))
     if open_ip and ipaddress.IPv4Address(open_ip) not in network:
         open_ip = None
-    collapse = _should_collapse(network.prefixlen, request.args.get("all"))
-    expand = _parse_expand(request.args.get("expand", ""), network)
-    rows = _collapse_runs(space, collapse, expand)
-    if open_ip and not any(not r.get("run") and r["ip"] == open_ip for r in rows):
-        for r in rows:
-            if r.get("run") and int(ipaddress.IPv4Address(r["first"])) <= int(ipaddress.IPv4Address(open_ip)) <= int(
-                ipaddress.IPv4Address(r["last"])
-            ):
-                rows = _collapse_runs(space, collapse, r["key"])
-                break
+
+    all_arg = request.args.get("all")
+    if all_arg == "1" and network.prefixlen < _MAX_ALL_PREFIX:
+        # v1.6.4 — showing every address materialises the whole subnet; offered up to a /22 (1,022
+        # hosts), refused above it rather than rendering (or building) tens of thousands of rows.
+        flash(f"Showing every address is only offered up to a /{_MAX_ALL_PREFIX}; {subnet['cidr']} is larger.", "error")
+        all_arg = None
+    collapse = _should_collapse(network.prefixlen, all_arg)
+
+    if collapse:
+        # v1.6.4 — the default view is built from the occupied set and the pool boundaries, never
+        # the whole address list: a /16 used to cost ~60 MB and about a second per request here.
+        total = network.num_addresses - (2 if network.prefixlen < 31 else 0)
+        counts = _count_sets(
+            total, lambda ip: _host_in_network(network, ip), active_leases, reservations, ipam_entries, ctx
+        )
+        expand = _parse_expand(request.args.get("expand", ""), network)
+        rows = _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=expand)
+        if open_ip and not any(not r.get("run") and r["ip"] == open_ip for r in rows):
+            for r in rows:
+                if r.get("run") and int(ipaddress.IPv4Address(r["first"])) <= int(
+                    ipaddress.IPv4Address(open_ip)
+                ) <= int(ipaddress.IPv4Address(r["last"])):
+                    rows = _build_rows_lazy(
+                        network, active_leases, reservations, ipam_entries, ctx, devices, expand=r["key"]
+                    )
+                    break
+        next_free = _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)
+    else:
+        # ?all=1, allowed only up to a /22 (1,022 hosts): the old full-materialisation path, kept as
+        # `_build_address_space` since the size is capped and simplicity wins over reusing the sets
+        # already loaded above.
+        space = _build_address_space(kind, subnet_id, subnet["cidr"], ctx=ctx, subnet=subnet)
+        counts = _count_space(space)
+        rows = list(space)
+        next_free = _next_free(space)
 
     return render_template(
         "ipam/subnet.html",
         kind=kind,
         subnet_id=subnet_id,
         subnet=subnet,
-        space=space,
         rows=rows,
         collapsed=collapse,
         counts=counts,
         ctx=ctx,
         pool_texts=[t for _f, _l, t in ctx.get("pools", [])],
-        next_free=_next_free(space),
+        next_free=next_free,
         recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
         open_ip=open_ip,
@@ -1019,61 +1173,85 @@ def export_csv(kind, subnet_id):
     if subnet is None:
         flash("Subnet not found or access denied.", "error")
         return redirect(url_for("ipam.index"))
+    try:
+        network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    except ValueError:
+        flash("Subnet CIDR is invalid.", "error")
+        return redirect(url_for("ipam.index"))
+    if _oversized_kea_subnet(kind, network):
+        flash(f"{subnet['cidr']} is larger than a /{_MAX_PREFIX} — IPAM does not export subnets this size.", "error")
+        return redirect(url_for("ipam.index"))
 
     fmt = request.args.get("format", "jen")
-    space = _build_address_space(kind, subnet_id, subnet["cidr"], subnet=subnet)
-    prefixlen = ipaddress.IPv4Network(subnet["cidr"], strict=False).prefixlen
+    db_kind = _KIND_DB[kind]
+    ctx = _subnet_ctx(kind, subnet_id, subnet)
+    active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
+    ipam_entries = _load_entries(db_kind, subnet_id)
+    devices = {}
+    if kind == "kea":
+        macs = {v["mac"] for v in active_leases.values()} | {v["mac"] for v in reservations.values()}
+        devices = _devices_by_mac(sorted(m for m in macs if m))
+    prefixlen = network.prefixlen
 
-    output = io.StringIO()
+    def _entries():
+        # v1.6.4 — one address composed at a time, never the whole subnet materialised at once.
+        for host in network.hosts():
+            yield _compose_entry(str(host), active_leases, reservations, ipam_entries, ctx, devices)
+
     if fmt == "netbox":
-        # Netbox's IP Addresses import columns — for anyone keeping both.
-        writer = csv.writer(output)
-        writer.writerow(["address", "status", "dns_name", "description", "tenant"])
-        for entry in space:
-            if entry["status"] == "available":
-                continue
-            desc = entry["label"] if entry["label"] != entry["hostname"] else ""
-            if entry["notes"]:
-                desc = f"{desc} — {entry['notes']}" if desc else entry["notes"]
-            writer.writerow(
-                _safe_row(
-                    [
-                        f"{entry['ip']}/{prefixlen}",
-                        _NETBOX_EXPORT_STATUS.get(entry["status"], "active"),
-                        entry["hostname"],
-                        desc,
-                        entry["owner"],
-                    ]
-                )
-            )
+        header = ["address", "status", "dns_name", "description", "tenant"]
+
+        def _values():
+            for entry in _entries():
+                if entry["status"] == "available":
+                    continue
+                desc = entry["label"] if entry["label"] != entry["hostname"] else ""
+                if entry["notes"]:
+                    desc = f"{desc} — {entry['notes']}" if desc else entry["notes"]
+                yield [
+                    f"{entry['ip']}/{prefixlen}",
+                    _NETBOX_EXPORT_STATUS.get(entry["status"], "active"),
+                    entry["hostname"],
+                    desc,
+                    entry["owner"],
+                ]
+
         suffix = "netbox"
     else:
-        fields = ["ip", "status", "hostname", "mac", "label", "owner", "notes", "in_pool", "device", "vendor"]
-        writer = csv.writer(output)
-        writer.writerow(fields)
-        for entry in space:
-            dev = entry.get("device") or {}
-            writer.writerow(
-                _safe_row(
-                    [
-                        entry["ip"],
-                        entry["status"],
-                        entry["hostname"],
-                        entry["mac"],
-                        entry["label"],
-                        entry["owner"],
-                        entry["notes"],
-                        "yes" if entry["in_pool"] else "no",
-                        dev.get("name", ""),
-                        dev.get("manufacturer", ""),
-                    ]
-                )
-            )
+        header = ["ip", "status", "hostname", "mac", "label", "owner", "notes", "in_pool", "device", "vendor"]
+
+        def _values():
+            for entry in _entries():
+                dev = entry.get("device") or {}
+                yield [
+                    entry["ip"],
+                    entry["status"],
+                    entry["hostname"],
+                    entry["mac"],
+                    entry["label"],
+                    entry["owner"],
+                    entry["notes"],
+                    "yes" if entry["in_pool"] else "no",
+                    dev.get("name", ""),
+                    dev.get("manufacturer", ""),
+                ]
+
         suffix = "jen"
 
     safe_name = _FILENAME_SAFE_RE.sub("_", subnet["name"]).strip("_") or "subnet"
-    response = make_response(output.getvalue())
-    response.headers["Content-Type"] = "text/csv"
+
+    def _stream():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(_safe_row(header))
+        yield buf.getvalue()
+        for values in _values():
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow(_safe_row(values))
+            yield buf.getvalue()
+
+    response = Response(stream_with_context(_stream()), mimetype="text/csv")
     response.headers["Content-Disposition"] = f"attachment; filename=ipam-{safe_name}-{kind}-{subnet_id}-{suffix}.csv"
     return response
 
@@ -1261,6 +1439,12 @@ def import_commit(kind, subnet_id):
         flash("Subnet CIDR is invalid.", "error")
         return redirect(detail_url)
 
+    # v1.6.4 — the same rule save_entry and the API apply: a row importing static/planned onto an
+    # address a live Kea lease or reservation already holds is rejected, not written over it. Loaded
+    # once for the whole import rather than per row.
+    leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
+    existing_entries = _load_entries(db_kind, subnet_id)
+
     saved = 0
     rejected = 0
     db = None
@@ -1284,6 +1468,9 @@ def import_commit(kind, subnet_id):
                 status = row.get("status")
                 if status not in _DESIGNATED:
                     status = "available"
+                if _designation_blocker(ip, status, leases_now, res_now, existing_entries.get(ip)):
+                    rejected += 1
+                    continue
                 label = str(row.get("label", "") or "")[:100]
                 owner = str(row.get("owner", "") or "")[:100]
                 notes = str(row.get("notes", "") or "")
@@ -1778,13 +1965,6 @@ def _check_conflicts():
 # ── Search provider (v1.6.0, plugin API v3) ───────────────────────────────────
 
 
-def _like_pattern(text):
-    """`%text%` for a LIKE with the user's own `%`, `_` and backslash taken literally: a search for
-    `10.0_1` used to match `10.0x1`, and a lone `%` matched every entry."""
-    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
 def _ipam_search(query, accessible_subnet_ids, all_subnets):
     """register_search_provider callback. Only kea-kind entries are
     returned: an unmanaged subnet's id is a separate numbering space from
@@ -1794,23 +1974,32 @@ def _ipam_search(query, accessible_subnet_ids, all_subnets):
     q = (query or "").strip()
     if not q:
         return []
-    like = _like_pattern(q)
+    from jen.plugin_api import like_pattern, search_scope
+
+    # v1.6.4 — filter to the caller's subnets IN THE QUERY, before its own LIMIT 20. It used to take
+    # the newest 20 matches of ANY subnet and let Jen's own re-filter drop the ones the caller cannot
+    # see afterward (the Q55 rule); a restricted caller whose only matches were past position 20 of
+    # some other subnet's got nothing, even with one match of their own.
+    scope = search_scope(accessible_subnet_ids, all_subnets, "subnet_id")
+    if scope is None:
+        return []
+    scope_clause, scope_params = scope
+    like = like_pattern(q)
     out = []
     db = None
     try:
         db = _jen_db()
         with db.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT ip, subnet_kind, subnet_id, label, owner, hostname, mac FROM ipam_static_entries
-                WHERE subnet_kind='kea' AND (label LIKE %s OR owner LIKE %s OR ip LIKE %s OR hostname LIKE %s)
+                WHERE subnet_kind='kea' AND {scope_clause}
+                  AND (label LIKE %s OR owner LIKE %s OR ip LIKE %s OR hostname LIKE %s)
                 ORDER BY updated_at DESC LIMIT 20
-            """,
-                (like, like, like, like),
+            """,  # nosec B608 - scope_clause is `search_scope()`'s own %s placeholders, values bound below
+                (*scope_params, like, like, like, like),
             )
             for row in cur.fetchall():
-                if row["subnet_kind"] != "kea":
-                    continue
                 out.append(
                     {
                         "title": row["label"] or row["hostname"] or row["ip"],
@@ -1863,6 +2052,8 @@ def _api_list_entries():
         subnet_id = int(request.args.get("subnet_id", ""))
     except (TypeError, ValueError):
         return jsonify({"error": "subnet_id is required"}), 400
+    if subnet_id <= 0:
+        return jsonify({"error": "subnet_id is required"}), 400
     subnet, refused = _api_subnet(subnet_id)
     if refused:
         return refused
@@ -1889,7 +2080,11 @@ def _api_list_entries():
 def _api_save_entry():
     from flask import g
 
-    body = request.get_json(silent=True) or {}
+    from jen.plugin_api import json_object_body, str_field
+
+    body, bad_body = json_object_body()
+    if bad_body:
+        return bad_body
     try:
         subnet_id = int(body.get("subnet_id"))
     except (TypeError, ValueError):
@@ -1898,7 +2093,7 @@ def _api_save_entry():
     if refused:
         return refused
 
-    ip = str(body.get("ip", "")).strip()
+    ip = str_field(body, "ip")
     try:
         addr = ipaddress.IPv4Address(ip)
         network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
@@ -1907,18 +2102,25 @@ def _api_save_entry():
     if addr not in network:
         return jsonify({"error": f"{ip} is not inside {subnet['cidr']}"}), 400
 
+    # v1.6.4 — an omitted status still defaults to static (unchanged); an EXPLICIT one that is not
+    # static/planned used to be silently coerced to static, the most consequential value, with a 200.
     status = body.get("status", "static")
     if status not in _DESIGNATED:
-        status = "static"
+        return jsonify({"error": "status must be static or planned"}), 400
     leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"])
     blocked = _designation_blocker(ip, status, leases_now, res_now, _load_entries("kea", subnet_id).get(ip))
     if blocked:
         return jsonify({"error": blocked}), 409
-    label = str(body.get("label", "") or "")[:100]
-    owner = str(body.get("owner", "") or "")[:100]
-    notes = str(body.get("notes", "") or "")
-    hostname = str(body.get("hostname", "") or "")[:255]
-    mac = _normalize_mac(body.get("mac", "")) or ""
+    label = str_field(body, "label", 100)
+    owner = str_field(body, "owner", 100)
+    notes = str_field(body, "notes")
+    hostname = str_field(body, "hostname", 255)
+    raw_mac = body.get("mac", "")
+    if raw_mac and not isinstance(raw_mac, str):
+        return jsonify({"error": "mac must be a string"}), 400
+    mac = _normalize_mac(raw_mac) or ""
+    if raw_mac and not mac:
+        return jsonify({"error": "invalid mac"}), 400
     actor = f"api:{g.api_key['name']}"
 
     db = None
@@ -1941,8 +2143,17 @@ def _api_next_free(subnet_id):
     subnet, refused = _api_subnet(subnet_id)
     if refused:
         return refused
-    space = _build_address_space("kea", subnet_id, subnet["cidr"], subnet=subnet)
-    return jsonify({"ip": _next_free(space)})
+    try:
+        network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
+    except ValueError:
+        return jsonify({"error": "subnet CIDR is invalid"}), 500
+    if network.prefixlen < _MAX_PREFIX:
+        return jsonify({"error": f"subnet is larger than a /{_MAX_PREFIX}"}), 400
+    ctx = _subnet_ctx("kea", subnet_id, subnet)
+    active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"])
+    ipam_entries = _load_entries("kea", subnet_id)
+    # v1.6.4 — walks the network lazily instead of materialising the whole address space for one IP.
+    return jsonify({"ip": _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)})
 
 
 def register(app):

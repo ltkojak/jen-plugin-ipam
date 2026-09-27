@@ -39,6 +39,14 @@ def _stub_modules():
     flask.Blueprint = Blueprint
     for name in ("flash", "jsonify", "make_response", "redirect", "render_template", "url_for"):
         setattr(flask, name, lambda *a, **k: None)
+
+    def _fake_response(body=None, **k):
+        # a streamed CSV passes an iterable of chunks; join it so a test can inspect the result
+        data = "".join(body) if body is not None and not isinstance(body, (str, bytes)) else (body or "")
+        return types.SimpleNamespace(headers={}, get_data=lambda: data)
+
+    flask.Response = _fake_response
+    flask.stream_with_context = lambda gen: gen
     flask.request = None
     sys.modules["flask"] = flask
     fl = types.ModuleType("flask_login")
@@ -92,6 +100,64 @@ def _stub_jen_plugin_api():
     plugin_api.api_key_required = lambda write=False: lambda fn: fn
     plugin_api.subnet_map = lambda: subnets
     plugin_api.api_key_can_access_subnet = api_key_can_access_subnet
+
+    def normalize_mac(raw):
+        import re as _re
+
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        cleaned = _re.sub(r"[^0-9a-fA-F]", "", raw).lower()
+        if len(cleaned) != 12:
+            return None
+        mac = ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
+        return mac if _re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", mac) else None
+
+    def like_pattern(text):
+        return "%" + str(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+    def in_placeholders(values):
+        n = len(list(values))
+        return ",".join(["%s"] * n) if n else "NULL"
+
+    def search_scope(accessible_ids, all_subnets, column):
+        if all_subnets:
+            return "1=1", []
+        ids = sorted({int(i) for i in (accessible_ids or [])})
+        if not ids:
+            return None
+        return f"{column} IN ({in_placeholders(ids)})", ids
+
+    def json_object_body():
+        # fetched fresh from sys.modules["flask"].request each call, so a per-test
+        # `sys.modules["flask"].request = types.SimpleNamespace(get_json=...)` is seen
+        import sys as _sys
+
+        req = getattr(_sys.modules.get("flask"), "request", None)
+        try:
+            body = req.get_json(silent=True) if req is not None else None
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            return body, None
+        return None, ({"error": "expected a JSON object"}, 400)
+
+    def str_field(body, name, max_len=None):
+        value = body.get(name) if isinstance(body, dict) else None
+        if not isinstance(value, str):
+            return ""
+        value = value.strip()
+        return value[:max_len] if max_len is not None else value
+
+    def assert_subnet_access(subnet_id, *, notify=True):
+        return True
+
+    plugin_api.normalize_mac = normalize_mac
+    plugin_api.like_pattern = like_pattern
+    plugin_api.in_placeholders = in_placeholders
+    plugin_api.search_scope = search_scope
+    plugin_api.json_object_body = json_object_body
+    plugin_api.str_field = str_field
+    plugin_api.assert_subnet_access = assert_subnet_access
     calls["subnets"] = subnets
     jen_pkg.plugin_api = plugin_api
     sys.modules["jen"] = jen_pkg
@@ -563,7 +629,9 @@ def main():
     p._load_kea_sets = lambda sid, cidr=None: ({}, {})
     fdb = FakeDB()
     p._jen_db = lambda: fdb
-    p.request = types.SimpleNamespace(get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"})
+    sys.modules["flask"].request = types.SimpleNamespace(
+        get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"}
+    )
     result = p._api_save_entry()
     check(
         isinstance(result, dict) and result.get("ok") is True and any(s[0] == "INSERT" for s in fdb.statements),
@@ -598,7 +666,9 @@ def main():
     sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted)
 
     # ── 1.6.2: the API does not return a raw database error ──────────────────
-    p.request = types.SimpleNamespace(get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"})
+    sys.modules["flask"].request = types.SimpleNamespace(
+        get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.7", "label": "x"}
+    )
     p._jen_db = lambda: (_ for _ in ()).throw(RuntimeError("Access denied marker-xyz"))
     result = p._api_save_entry()
     check(
@@ -753,9 +823,126 @@ def main():
     )
     check(p._check_access("u", 4) is None and len(flashed) == 1, "_check_access: a page route still flashes")
     p.current_user.all_subnets = True
-    check(p._like_pattern("10.0_1") == "%10.0\\_1%", "search: an underscore is literal")
-    check(p._like_pattern("50%") == "%50\\%%", "search: a percent sign is literal")
-    check(p._like_pattern("a\\b") == "%a\\\\b%", "search: a backslash is literal")
+    from jen.plugin_api import like_pattern as _like_pattern
+
+    check(_like_pattern("10.0_1") == "%10.0\\_1%", "search: an underscore is literal")
+    check(_like_pattern("50%") == "%50\\%%", "search: a percent sign is literal")
+    check(_like_pattern("a\\b") == "%a\\\\b%", "search: a backslash is literal")
+
+    # ── 1.6.4: the search provider scopes in SQL, before its own LIMIT ────────
+    class _QueryDB:
+        def __init__(self):
+            self.log = []
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            self.log.append((" ".join(sql.split()), params))
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            pass
+
+    _stub_jen_plugin_api()
+    fdb = _QueryDB()
+    p._jen_db = lambda: fdb
+    p._ipam_search("printer", {1}, False)
+    sql, params = fdb.log[0]
+    check(
+        "IN (%s)" in sql and params[0] == 1,
+        f"search: the caller's own subnet scope is in the SQL, not applied afterward (got {sql!r}, {params})",
+    )
+    fdb = _QueryDB()
+    p._jen_db = lambda: fdb
+    p._ipam_search("printer", set(), False)
+    check(fdb.log == [], "search: a caller who may see nothing runs no query at all")
+
+    # ── 1.6.4: the collapsed detail view, built without materialising the subnet ──
+    net_big = ipaddress.IPv4Network("10.9.0.0/24")
+    ctx_big = {
+        "gateways": ["10.9.0.1"],
+        "dns": [],
+        "pools": [(int(ipaddress.IPv4Address("10.9.0.100")), int(ipaddress.IPv4Address("10.9.0.150")), "x")],
+        "infrastructure": {"10.9.0.0": "network", "10.9.0.1": "gateway", "10.9.0.255": "broadcast"},
+        "notes": "",
+    }
+    leases_big = {"10.9.0.50": {"hostname": "a", "mac": "aa:aa:aa:aa:aa:50"}}
+    res_big = {"10.9.0.60": {"hostname": "b", "mac": "aa:aa:aa:aa:aa:60", "host_id": 1}}
+    entries_big = {"10.9.0.70": {"label": "x", "entry_status": "static", "is_static": 1}}
+    old_ips = [str(h) for h in net_big.hosts()]
+    old_space = p._compose_space(old_ips, leases_big, res_big, entries_big, ctx_big)
+    old_rows = p._collapse_runs(old_space, True)
+    lazy_rows = p._build_rows_lazy(net_big, leases_big, res_big, entries_big, ctx_big, {})
+    check(lazy_rows == old_rows, "_build_rows_lazy: identical output to the old full-materialisation path")
+    old_expanded = p._collapse_runs(old_space, True, expand=old_rows[0]["key"]) if old_rows[0].get("run") else None
+    if old_expanded is not None:
+        lazy_expanded = p._build_rows_lazy(
+            net_big, leases_big, res_big, entries_big, ctx_big, {}, expand=old_rows[0]["key"]
+        )
+        check(lazy_expanded == old_expanded, "_build_rows_lazy: expand gives the same rows as the old path")
+    check(
+        p._next_free_lazy(net_big, leases_big, res_big, entries_big, ctx_big) == p._next_free(old_space),
+        "_next_free_lazy: the same answer as the old full-materialisation next_free",
+    )
+
+    # ── 1.6.4: ?all=1 refused above a /22; a Kea subnet larger than /16 refused on detail/export ──
+    check(p._MAX_ALL_PREFIX == 22, "the ?all=1 cap is a /22")
+    flashed.clear()
+    p.request = types.SimpleNamespace(args={"all": "1"}, form={})
+    p._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.9.0.0/16"}
+    p._subnet_ctx = lambda kind, sid, subnet: ctx_big
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    p._load_entries = lambda kind, sid: {}
+    p._history_rows = lambda *a, **k: []
+    p.render_template = lambda name, **kw: kw
+    page = p.subnet_detail("kea", 9)
+    check(
+        page["collapsed"] is True and any("22" in m for m in flashed),
+        f"subnet_detail: ?all=1 on a /16 is refused and falls back to collapsed (got {page.get('collapsed')}, {flashed})",
+    )
+    oversized_net = ipaddress.IPv4Network("10.0.0.0/12")
+    check(p._oversized_kea_subnet("kea", oversized_net) is True, "_oversized_kea_subnet: a Kea /12 is oversized")
+    check(p._oversized_kea_subnet("kea", net_big) is False, "_oversized_kea_subnet: a Kea /24 is fine")
+    check(
+        p._oversized_kea_subnet("u", oversized_net) is False,
+        "_oversized_kea_subnet: only the kea kind is checked here (unmanaged already capped at add_subnet)",
+    )
+    flashed.clear()
+    p._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.0.0.0/12"}
+    page = p.subnet_detail("kea", 9)
+    check(
+        page == "redirect" and any("larger than" in m and "/16" in m for m in flashed),
+        f"subnet_detail: an oversized Kea subnet is refused before anything is built (got {page}, {flashed})",
+    )
+    flashed.clear()
+    r = p.export_csv("kea", 9)
+    check(
+        r == "redirect" and any("does not export" in m for m in flashed),
+        f"export_csv: an oversized Kea subnet is refused before anything is streamed (got {r}, {flashed})",
+    )
+
+    # ── 1.6.4: the CSV export streams instead of building the whole subnet in memory ──
+    p._check_access = lambda kind, sid, notify=True: {"name": "sub", "cidr": "10.9.0.0/24"}
+    p._subnet_ctx = lambda kind, sid, subnet: ctx_big
+    p._load_kea_sets = lambda sid, cidr=None: (leases_big, res_big)
+    p._load_entries = lambda kind, sid: entries_big
+    p._devices_by_mac = lambda macs: {}
+    resp = p.export_csv("kea", 9)
+    body = resp.get_data()
+    check(
+        "10.9.0.50" in body and "10.9.0.60" in body and "10.9.0.70" in body,
+        "export_csv: the streamed rows include the occupied addresses",
+    )
+    check("ip,status,hostname" in body, "export_csv: the header is the first streamed chunk")
 
     # ── register(): runs end to end against a stub that enforces Jen's rules ──
     calls = _stub_jen_plugin_api()

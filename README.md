@@ -6,7 +6,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.2 or later (v1.6.2 runs on 5.57.0+; v1.5.x on 5.34.0+)
+- [Jen](https://github.com/ltkojak/jen-kea) v5.65.10 or later (v1.6.2 runs on 5.57.0+; v1.5.x on 5.34.0+)
 
 ## Features
 

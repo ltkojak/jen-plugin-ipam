@@ -1,5 +1,64 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.4] - 2026-09-27
+
+Jen's Q100 sweep: every bundled plugin moves onto the small helpers Jen 5.65.10 added, and this is the
+first of them to also carry its own performance work, since IPAM was the plugin most exposed to a large
+subnet.
+
+### Changed: onto Jen's shared helpers
+
+The MAC check, the search-LIKE escaping and the subnet-not-found check now delegate to
+`jen.plugin_api.normalize_mac` / `like_pattern` / `assert_subnet_access(notify=)` instead of carrying
+their own copies. Requires Jen 5.65.10.
+
+### Fixed: the detail page, export and next-free materialised the whole subnet first
+
+Every one of them built a Python dict for every host address before doing anything else - `[str(h) for h
+in network.hosts()]` - so a Kea /16 (65,534 addresses) cost roughly a second and tens of megabytes on
+every detail-page load, every CSV export and every "next free" click, even though the page then collapses
+almost all of that into a handful of run rows. The detail page's default (collapsed) view is now built
+from the addresses that actually have something to show - a lease, a reservation, an infrastructure
+address, or an entry of its own - with the ranges between them turned into run rows directly from the
+pool boundaries, never enumerating an address that will only ever read "available". Next-free walks the
+subnet lazily and stops at the first free address outside every pool, instead of composing every address
+first. CSV export streams one row at a time. Showing every address (`?all=1`) still exists, exactly as
+before, but only up to a /22 (1,022 hosts); above that it is refused with a message rather than building
+or rendering tens of thousands of rows. A Kea subnet larger than a /16 - the same cap unmanaged subnets
+have always had - now gets the same refusal on the detail page and on export that an oversized unmanaged
+subnet already got when someone tried to add it.
+
+### Fixed: the global search filtered after its own twenty-row limit
+
+Registered as a Jen search provider, IPAM's own query took the newest twenty matches across every subnet
+and let Jen's own re-filter drop the ones outside the caller's scope afterward - a restricted caller whose
+only match was the twenty-first newest row, behind twenty matches in a subnet they cannot see, got no
+results at all. The caller's own subnet scope is now part of the query itself, so the limit applies to
+what they may actually see.
+
+### Fixed: the JSON API accepted a status it then silently changed
+
+`POST /api/v1/plugins/ipam/entries` took an unrecognised `status` value and saved the entry as `static`
+anyway, the most consequential of the two designations, with a 200 response that gave no sign anything had
+been substituted. An explicit status that is not `static` or `planned` is now a 400. A non-object body (an
+array, a string, a bare number) is a 400 instead of reaching `.get` and raising, and a non-string `mac` is
+a 400 instead of raising inside the MAC parser.
+
+### Fixed: importing a CSV could overwrite a live lease or reservation
+
+The single-entry save form and the JSON API already refuse to newly mark an address static or planned
+when a Kea lease or reservation already holds it; the CSV/Netbox import path did not carry the same check,
+so an imported row could silently take over an address DHCP was still using. It is checked now, and a
+blocked row counts toward the "skipped" total the import reports.
+
+### Changed
+
+- `tools/test_plugin.py` checks that the collapsed detail view (`_build_rows_lazy`) gives byte-for-byte
+  the same rows the old full-materialisation path did on the same fixture, that next-free's lazy and
+  full-materialisation answers agree, that the search query carries the caller's own scope, that an
+  oversized Kea subnet and an over-large `?all=1` are refused before anything is built, and that the
+  streamed CSV's rows are the ones expected.
+
 ## [1.6.3] - 2026-09-26
 
 The recurring pattern of this round, named as in every plugin release: a route decides access on one
