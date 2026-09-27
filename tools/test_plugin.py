@@ -894,6 +894,45 @@ def main():
         "_next_free_lazy: the same answer as the old full-materialisation next_free",
     )
 
+    # ── 1.6.4: the collapsed /16 detail page — the actual scale finding — never materialises the
+    # 65,536-address space (the old `_build_address_space` cost ~60 MB and ~1 s of that alone) ──
+    import time
+
+    net_16 = ipaddress.IPv4Network("10.200.0.0/16")
+    ctx_16 = {
+        "gateways": ["10.200.0.1"],
+        "dns": [],
+        "pools": [(int(ipaddress.IPv4Address("10.200.10.0")), int(ipaddress.IPv4Address("10.200.10.255")), "x")],
+        "infrastructure": {"10.200.0.0": "network", "10.200.0.1": "gateway", "10.200.255.255": "broadcast"},
+        "notes": "",
+    }
+    # 500 addresses spread across the /16 — a realistic populated subnet, nowhere near "everything".
+    leases_16 = {
+        str(ipaddress.IPv4Address(int(net_16.network_address) + i * 100 + 1)): {
+            "hostname": f"host-{i}",
+            "mac": f"aa:aa:aa:aa:{i // 256:02x}:{i % 256:02x}",
+        }
+        for i in range(500)
+    }
+    start = time.perf_counter()
+    rows_16 = p._build_rows_lazy(net_16, leases_16, {}, {}, ctx_16, {})
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    check(
+        elapsed_ms < 200,
+        f"_build_rows_lazy: a /16 (65,536 addresses, 500 occupied) collapses in under 200ms (got {elapsed_ms:.1f}ms)",
+    )
+    check(
+        len(rows_16) < 2000,
+        f"_build_rows_lazy: a /16's collapsed rows are proportional to what's occupied, not to 65,536 (got {len(rows_16)} rows)",
+    )
+    start = time.perf_counter()
+    free_16 = p._next_free_lazy(net_16, leases_16, {}, {}, ctx_16)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    check(
+        free_16 is not None and elapsed_ms < 200,
+        f"_next_free_lazy: a /16 with sparse occupancy answers in under 200ms (got {elapsed_ms:.1f}ms, free={free_16})",
+    )
+
     # ── 1.6.4: ?all=1 refused above a /22; a Kea subnet larger than /16 refused on detail/export ──
     check(p._MAX_ALL_PREFIX == 22, "the ?all=1 cap is a /22")
     flashed.clear()

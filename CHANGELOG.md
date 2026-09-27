@@ -1,5 +1,15 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.5] - 2026-09-27
+
+Test-only follow-up to 1.6.4: no code change. The round's own harness never actually measured the
+/16 detail page's lazy-build against the scale it was fixed for — `tools/test_plugin.py` now
+builds `_build_rows_lazy`/`_next_free_lazy` against a real `/16` (65,536 addresses) with 500
+addresses occupied, a realistically populated subnet, and times both. Measured on the harness's
+own machine: `_build_rows_lazy` in ~4ms, `_next_free_lazy` in under 1ms — both comfortably inside
+the 200ms budget the original finding named, and the collapsed row count (~1,000) stays
+proportional to what's occupied rather than to the address space itself.
+
 ## [1.6.4] - 2026-09-27
 
 Jen's Q100 sweep: every bundled plugin moves onto the small helpers Jen 5.65.10 added, and this is the
