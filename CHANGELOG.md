@@ -1,5 +1,17 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.6.6] - 2026-09-30
+
+The subnet page's Create Reservation link sent `subnet=`, a parameter name
+Jen's `add_reservation()` route never read — so the form opened with
+whatever subnet happened to be first in the select, not the one this entry
+actually belongs to (Jen 5.66.0-beta.8, Q110, closes it Jen-side too:
+`subnet=` is now accepted as an alias, and the route falls back to the
+address's own CIDR and the MAC's known subnet when nothing is passed at
+all). Fixed here at the source: the link now sends `subnet_id=`, matching
+the route's canonical parameter, and every value on it — the address, the
+subnet id, the MAC — is URL-encoded.
+
 ## [1.6.5] - 2026-09-27
 
 Test-only follow-up to 1.6.4: no code change. The round's own harness never actually measured the

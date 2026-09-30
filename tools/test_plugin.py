@@ -983,6 +983,30 @@ def main():
     )
     check("ip,status,hostname" in body, "export_csv: the header is the first streamed chunk")
 
+    # ── 1.6.6: the Create Reservation link carries subnet_id=, not subnet= ──
+    # Jen's own add_reservation() route only ever reads subnet_id (subnet= is
+    # accepted as an alias, but the canonical name is what every link should
+    # send). render_template is stubbed above to return its own kwargs rather
+    # than real HTML, so this reads the template SOURCE directly instead.
+    with open(os.path.join(ROOT, "templates", "ipam", "subnet.html"), encoding="utf-8") as f:
+        subnet_html = f.read()
+    reservation_line = next(
+        (line for line in subnet_html.splitlines() if "/reservations/add?" in line),
+        "",
+    )
+    check(
+        "subnet_id={{ subnet_id" in reservation_line,
+        f"subnet.html: the Create Reservation link must carry subnet_id= (got: {reservation_line!r})",
+    )
+    check(
+        "&subnet={{" not in reservation_line,
+        f"subnet.html: the Create Reservation link must not still carry the wrong subnet= alias (got: {reservation_line!r})",
+    )
+    check(
+        "entry.ip|urlencode" in reservation_line and "subnet_id|urlencode" in reservation_line,
+        f"subnet.html: the Create Reservation link's values must be urlencoded (got: {reservation_line!r})",
+    )
+
     # ── register(): runs end to end against a stub that enforces Jen's rules ──
     calls = _stub_jen_plugin_api()
     try:

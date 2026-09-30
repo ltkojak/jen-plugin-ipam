@@ -262,7 +262,7 @@
 
                 {% if not unmanaged %}
                 {% if entry.status in ('available', 'static', 'planned', 'conflict') %}
-                <a href="/reservations/add?ip={{ entry.ip }}&subnet={{ subnet_id }}{% if entry.mac and not entry.mac.startswith('id:') %}&mac={{ entry.mac }}{% endif %}"
+                <a href="/reservations/add?ip={{ entry.ip|urlencode }}&subnet_id={{ subnet_id|urlencode }}{% if entry.mac and not entry.mac.startswith('id:') %}&mac={{ entry.mac|urlencode }}{% endif %}"
                    class="btn btn-sm btn-secondary ip-dd269a" title="Create Reservation" aria-label="Create Reservation">
                     {{ icon("pin") }}
                 </a>
