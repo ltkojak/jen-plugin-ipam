@@ -1,5 +1,24 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.7.0] - 2026-10-04
+
+Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.
+
+### Added: what IPAM says about its address, on Jen's Investigation page
+
+Jen's Investigation page (`/client`) now has a "What else Jen knows" section on its Overview, and this plugin
+contributes one card to it: for each address the client holds (a lease, a reservation, the address the page was opened
+on), IPAM's own entry on a Kea subnet — static, planned, or merely annotated with a label or an owner — and whether this
+client is the one it was designated for, by the entry's MAC or hostname when it names one. A static or planned address the
+client holds by lease or reservation is the conflict IPAM already flags in its own periodic check, and an address
+designated for a different MAC or hostname is its neighbour, so either makes the card a "Needs a look" one and its
+sentence joins the Investigation page's one-line answer. An address IPAM has no entry for adds no card.
+
+The caller's subnet scope is in the query, before its limit, so a restricted caller never receives an entry from a subnet
+outside the set Jen handed over; unmanaged subnets are not read (their ids are a separate numbering space from Jen's and
+cannot be compared with the caller's scope). The next-free address stays on the subnet page, which the card links to.
+`requires_jen` moves to 5.68.0 because the hook does not exist before it.
+
 ## [1.6.6] - 2026-09-30
 
 The subnet page's Create Reservation link sent `subnet=`, a parameter name

@@ -6,7 +6,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.10 or later (v1.6.2 runs on 5.57.0+; v1.5.x on 5.34.0+)
+- [Jen](https://github.com/ltkojak/jen-kea) v5.68.0 or later (v1.6.x runs on 5.65.10+; v1.5.x on 5.34.0+)
 
 ## Features
 
@@ -18,6 +18,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 - **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease. A periodic check alerts once per new conflict (Settings → Alerts, type "IPAM Conflict") and emits an event for the Timeline
 - **Search + JSON API** — entries show up in Jen's global search by label, owner, IP or hostname; `GET/POST /api/v1/plugins/ipam/entries` and `GET /api/v1/plugins/ipam/next-free/<subnet_id>` for scripting, authenticated with a Jen API key and scoped to the subnets that key is allowed (a key with no scope reaches every subnet)
 - **"Open in IPAM"** row action on Jen's own Reservations page, linking straight to that address
+- **On the Investigation page** (Jen 5.68.0): a card under "What else Jen knows" with IPAM's entry for each address a client holds - static, planned or annotated - and whether the client is the one it was designated for; a conflict or a different designee is a "Needs a look" card
 - **Range…** — mark a from–to span planned/static (one label/owner) or clear it; leases and reservations are never overwritten
 - **Edit modal** — context-aware per IP status:
   - Dynamic / Reserved: notes only (Kea controls identity)

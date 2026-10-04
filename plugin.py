@@ -2016,6 +2016,134 @@ def _ipam_search(query, accessible_subnet_ids, all_subnets):
     return out
 
 
+# ── Investigation provider (v1.7.0, Jen 5.68.0) ──────────────────────────────
+
+_INVESTIGATION_MAX_ENTRIES = 10
+
+
+def _held_addresses(subject):
+    """Pure: {ip: how the client holds it} for the client's own addresses - "lease" for an active lease, "reservation" for
+    a Kea reservation (a reservation wins when both name the address), "address" for one that was only typed in. Each is
+    validated and the map is capped. The keys are what IPAM's own entries are looked up by."""
+    held = {}
+
+    def note(raw, how):
+        try:
+            addr = str(ipaddress.IPv4Address(str(raw).strip()))
+        except ValueError:
+            return
+        if addr not in held or (how == "reservation" and held[addr] != "reservation"):
+            held[addr] = how
+
+    for row in getattr(subject, "leases4", None) or []:
+        if isinstance(row, dict):
+            note(row.get("ip"), "lease")
+    for row in getattr(subject, "reservations", None) or []:
+        if isinstance(row, dict):
+            note(row.get("ip"), "reservation")
+    note(getattr(subject, "ip", ""), "address")
+    return dict(list(held.items())[:6])
+
+
+def _who_for(entry, mac, names):
+    """Pure: is this client the one the entry was designated for? "yes" / "no" when the entry names a MAC or a hostname to
+    compare (the MAC wins when both are there), "" when it names neither - IPAM then has nothing to say about who."""
+    entry_mac = (entry.get("mac") or "").strip().lower()
+    if entry_mac:
+        return "yes" if entry_mac == (mac or "") else "no"
+    entry_name = (entry.get("hostname") or "").strip().lower().split(".")[0]
+    if entry_name:
+        return "yes" if entry_name in names else "no"
+    return ""
+
+
+def investigation_card(entries, held, mac="", names=()):
+    """Pure: the Investigation page's card from IPAM's own entries on the client's addresses, or None when there is
+    nothing to say. A designated (static or planned) address the client holds by lease or reservation is the conflict IPAM
+    already flags, so it is a warn card, as is an address designated for a different MAC or hostname; an address designated
+    for this client, or merely annotated (a label, an owner), is an ok card. An address with no IPAM entry says nothing."""
+    parts, rows, warn = [], [], False
+    for e in (entries or [])[:_INVESTIGATION_MAX_ENTRIES]:
+        status = _designated_status(e)
+        designated = status in _DESIGNATED
+        name = e.get("label") or e.get("owner") or ""
+        if not designated and not (e.get("label") or e.get("owner")):
+            continue
+        how = held.get(e["ip"], "address")
+        who = _who_for(e, mac, names) if designated else ""
+        bits = [status if designated else "annotated"]
+        if name:
+            bits.append(name)
+        if e.get("owner") and e.get("owner") != name:
+            bits.append(f"owner {e['owner']}")
+        verdict = ""
+        if designated and how in ("lease", "reservation"):
+            warn = True
+            verdict = (
+                f"held by {'a DHCP lease' if how == 'lease' else 'a Kea reservation'} - IPAM flags that as a conflict"
+            )
+        if designated and who == "no":
+            warn = True
+            verdict = (verdict + "; " if verdict else "") + "designated for a different client"
+        elif designated and who == "yes":
+            verdict = (verdict + "; " if verdict else "") + "designated for this client"
+        rows.append({"label": e["ip"], "value": " - ".join(bits) + (f" ({verdict})" if verdict else "")})
+        parts.append(f"{e['ip']} is {bits[0]}" + (f" ({name})" if name else "") + (f": {verdict}" if verdict else ""))
+    if not rows:
+        return None
+    return {"summary": "; ".join(parts[:3]), "status": "warn" if warn else "ok", "rows": rows}
+
+
+def _entries_for_addresses(addresses, accessible_subnet_ids, all_subnets):
+    """IPAM's own entries on Kea subnets for these addresses, inside the caller's subnet scope - in the query, before its
+    LIMIT (the same rule as the search provider). Unmanaged-subnet entries are not read: an unmanaged subnet's id is a
+    separate numbering space from Jen's, so it cannot be compared with the caller's scope."""
+    from jen.plugin_api import in_placeholders, search_scope
+
+    if not addresses:
+        return []
+    scope = search_scope(accessible_subnet_ids, all_subnets, "subnet_id")
+    if scope is None:
+        return []
+    scope_clause, scope_params = scope
+    db = None
+    try:
+        db = _jen_db()
+        with db.cursor() as cur:
+            cur.execute(
+                f"SELECT ip, subnet_id, label, owner, hostname, mac, is_static, entry_status FROM ipam_static_entries "
+                f"WHERE subnet_kind='kea' AND {scope_clause} AND ip IN ({in_placeholders(addresses)}) "
+                f"ORDER BY ip LIMIT {_INVESTIGATION_MAX_ENTRIES}",  # nosec B608 - scope_clause and the IN list are %s placeholders; every value is bound below
+                (*scope_params, *addresses),
+            )
+            return list(cur.fetchall())
+    finally:
+        if db:
+            db.close()
+
+
+def _investigate(subject, accessible_subnet_ids, all_subnets):
+    """The Investigation page's card for the client Jen resolved: what IPAM says about the addresses it holds. Each entry is
+    judged on its own subnet, in the query, so a restricted caller never receives one from a subnet outside the set Jen
+    handed over. (The subnet page keeps the next-free address; the card links there.)"""
+    from jen.plugin_api import normalize_mac
+
+    held = _held_addresses(subject)
+    entries = _entries_for_addresses(list(held), accessible_subnet_ids, all_subnets)
+    names = set()
+    for raw in [getattr(subject, "hostname", "")] + [
+        r.get("hostname") for r in (getattr(subject, "leases4", None) or []) if isinstance(r, dict)
+    ]:
+        label = str(raw or "").strip().lower().split(".")[0]
+        if label:
+            names.add(label)
+    card = investigation_card(entries, held, normalize_mac(getattr(subject, "mac", "") or "") or "", names)
+    if card is not None:
+        first = entries[0]
+        card["href"] = f"/network/ipam/subnet/kea/{first['subnet_id']}?ip={first['ip']}"
+    return card
+
+
 # ── JSON API (v1.6.0, plugin API v3) ──────────────────────────────────────────
 # Undecorated on purpose: api_key_required() is applied in register(app),
 # not here, so plugin.py's top level never imports jen.plugin_api — the
@@ -2162,6 +2290,7 @@ def register(app):
     from jen.plugin_api import (
         api_key_required,
         register_alert_type,
+        register_investigation_provider,
         register_periodic,
         register_row_action,
         register_search_provider,
@@ -2188,5 +2317,6 @@ def register(app):
         href="/network/ipam/subnet/kea/{subnet_id}?ip={ip}",
     )
     register_search_provider("ipam", title="IPAM", fn=_ipam_search)
+    register_investigation_provider("ipam", title="IPAM Lite", fn=_investigate)
 
     logger.info("IPAM Lite plugin registered")

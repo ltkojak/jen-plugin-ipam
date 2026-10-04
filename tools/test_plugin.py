@@ -66,7 +66,7 @@ def _stub_jen_plugin_api():
     may not run more often than PERIODIC_MIN_MINUTES (5). A plugin that breaks either raises at
     register() in Jen, is swallowed by its per-plugin error handling, and simply never loads — the
     exact way watchdog 1.0.0 and dns-sync 1.0.0 shipped dead (Q89). Returns the registered calls."""
-    calls = {"alert_types": [], "periodic": [], "row_actions": [], "search": []}
+    calls = {"alert_types": [], "periodic": [], "row_actions": [], "search": [], "investigation": []}
     subnets = {5: {"name": "n", "cidr": "10.5.0.0/24"}}
 
     def api_key_can_access_subnet(key, subnet_id, *, allow_unattributed=False):
@@ -97,6 +97,7 @@ def _stub_jen_plugin_api():
     plugin_api.register_periodic = register_periodic
     plugin_api.register_row_action = lambda *a, **k: calls["row_actions"].append(a)
     plugin_api.register_search_provider = lambda *a, **k: calls["search"].append(a)
+    plugin_api.register_investigation_provider = lambda *a, **k: calls["investigation"].append((a, k))
     plugin_api.api_key_required = lambda write=False: lambda fn: fn
     plugin_api.subnet_map = lambda: subnets
     plugin_api.api_key_can_access_subnet = api_key_can_access_subnet
@@ -1027,6 +1028,147 @@ def main():
     check(
         len(calls["row_actions"]) == 1 and len(calls["search"]) == 1,
         "register(): one row action and one search provider",
+    )
+    check(
+        len(calls["investigation"]) == 1
+        and calls["investigation"][0][0] == ("ipam",)
+        and calls["investigation"][0][1]["fn"] is p._investigate,
+        "register(): exactly one investigation provider, the plugin's own",
+    )
+
+    # ── 1.7.0: the investigation provider ────────────────────────────────────
+    ns = types.SimpleNamespace
+    subject = ns(
+        mac="AA:BB:CC:DD:EE:01", ip="10.5.0.9", hostname="Desk.lan",
+        leases4=[{"ip": "10.5.0.5", "hostname": "desk"}], reservations=[{"ip": "10.5.0.6"}, {"ip": "10.5.0.5"}],
+    )  # fmt: skip
+    check(
+        p._held_addresses(subject) == {"10.5.0.5": "reservation", "10.5.0.6": "reservation", "10.5.0.9": "address"},
+        f"_held_addresses: a reservation wins over a lease, a typed-only address is 'address' (got {p._held_addresses(subject)})",
+    )
+    check(
+        p._held_addresses(ns(ip="", leases4=None, reservations=None)) == {}, "_held_addresses: nothing known is empty"
+    )
+    mine = {"ip": "10.5.0.5", "subnet_id": 5, "label": "printer", "owner": "ops", "hostname": None, "mac": None,
+            "is_static": 1, "entry_status": "static"}  # fmt: skip
+    check(
+        p._who_for(dict(mine, mac="AA:BB:CC:DD:EE:01"), "aa:bb:cc:dd:ee:01", set()) == "yes",
+        "_who_for: a matching MAC is this client",
+    )
+    check(
+        p._who_for(dict(mine, mac="aa:bb:cc:dd:ee:99"), "aa:bb:cc:dd:ee:01", {"desk"}) == "no",
+        "_who_for: a different MAC is not, whatever the hostname",
+    )
+    check(
+        p._who_for(dict(mine, hostname="Desk.example.com"), "aa:bb:cc:dd:ee:01", {"desk"}) == "yes",
+        "_who_for: a matching hostname label is this client",
+    )
+    check(
+        p._who_for(dict(mine, hostname="other"), "aa:bb:cc:dd:ee:01", {"desk"}) == "no",
+        "_who_for: a different hostname is not",
+    )
+    check(
+        p._who_for(mine, "aa:bb:cc:dd:ee:01", {"desk"}) == "",
+        "_who_for: an entry naming neither says nothing about who",
+    )
+    check(p.investigation_card([], {}) is None, "investigation_card: no entry adds no card")
+    check(
+        p.investigation_card([dict(mine, label="", owner="", entry_status="available", is_static=0)], {}) is None,
+        "investigation_card: an available address with no annotation says nothing",
+    )
+    conflict = p.investigation_card([mine], {"10.5.0.5": "lease"})
+    check(
+        conflict["status"] == "warn"
+        and "10.5.0.5 is static (printer)" in conflict["summary"]
+        and "conflict" in conflict["summary"],
+        f"investigation_card: a designated address held by a lease is the conflict IPAM flags (got {conflict['summary']!r})",
+    )
+    check(
+        {
+            "label": "10.5.0.5",
+            "value": "static - printer - owner ops (held by a DHCP lease - IPAM flags that as a conflict)",
+        }
+        in conflict["rows"],
+        f"investigation_card: the row names the entry and why (got {conflict['rows']})",
+    )
+    calm = p.investigation_card([dict(mine, entry_status="planned", is_static=0)], {"10.5.0.5": "address"})
+    check(
+        calm["status"] == "ok" and calm["summary"] == "10.5.0.5 is planned (printer)",
+        f"investigation_card: a planned address nobody holds is an ok card (got {calm['summary']!r})",
+    )
+    other = p.investigation_card(
+        [dict(mine, mac="aa:bb:cc:dd:ee:99")], {"10.5.0.5": "address"}, "aa:bb:cc:dd:ee:01", set()
+    )
+    check(
+        other["status"] == "warn" and "designated for a different client" in other["summary"],
+        "investigation_card: an address designated for a different MAC is a warn card",
+    )
+    own = p.investigation_card(
+        [dict(mine, mac="aa:bb:cc:dd:ee:01")], {"10.5.0.5": "address"}, "aa:bb:cc:dd:ee:01", set()
+    )
+    check(
+        own["status"] == "ok" and "designated for this client" in own["summary"],
+        "investigation_card: an address designated for this client is an ok card",
+    )
+    note_only = p.investigation_card([dict(mine, entry_status="available", is_static=0)], {"10.5.0.5": "lease"})
+    check(
+        note_only["status"] == "ok" and "annotated" in note_only["summary"],
+        "investigation_card: an annotated available address held by a lease is no conflict",
+    )
+
+    # the impure provider, end to end through the plugin's own query
+    class RowsDB:
+        def __init__(self, rows):
+            self.rows, self.sql, self.params = rows, "", ()
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            self.sql, self.params = " ".join(sql.split()), params
+
+        def fetchall(self):
+            return list(self.rows)
+
+        def close(self):
+            pass
+
+    db = RowsDB([dict(mine)])
+    p._jen_db = lambda: db
+    got = p._investigate(subject, {5}, False)
+    check(
+        got is not None and got["href"] == "/network/ipam/subnet/kea/5?ip=10.5.0.5" and got["status"] == "warn",
+        f"_investigate: the card for a seeded client, linking to its entry (got {got})",
+    )
+    check(
+        "subnet_kind='kea'" in db.sql
+        and "subnet_id IN (%s)" in db.sql
+        and "ip IN (%s,%s,%s)" in db.sql
+        and db.params == (5, "10.5.0.5", "10.5.0.6", "10.5.0.9"),
+        f"_investigate: the caller's scope and every address are bound parameters of the one query (got {db.sql!r}, {db.params})",
+    )
+    db = RowsDB([])
+    p._jen_db = lambda: db
+    check(
+        p._investigate(subject, None, True) is None and "1=1" in db.sql,
+        "_investigate: an unknown client gets None; unrestricted scope is 1=1",
+    )
+    db = RowsDB([dict(mine)])
+    p._jen_db = lambda: db
+    check(
+        p._investigate(subject, set(), False) is None and db.sql == "",
+        "_investigate: a caller who may see no subnet runs no query at all",
+    )
+    check(
+        p._investigate(ns(mac="", ip="", hostname="", leases4=[], reservations=[]), None, True) is None
+        and db.sql == "",
+        "_investigate: a subject with no address runs no query",
     )
 
     if failures:
