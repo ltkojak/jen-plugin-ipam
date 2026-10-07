@@ -13,6 +13,7 @@ Run: `python3 tools/test_plugin.py` (exit 1 on the first failing check).
 import importlib.util
 import ipaddress
 import os
+import pathlib
 import sys
 import types
 
@@ -94,6 +95,7 @@ def _stub_jen_plugin_api():
     jen_pkg = types.ModuleType("jen")
     plugin_api = types.ModuleType("jen.plugin_api")
     plugin_api.register_alert_type = register_alert_type
+    plugin_api.ACTIVE_LEASE4 = "state = 0 AND expire > NOW()"
     plugin_api.register_periodic = register_periodic
     plugin_api.register_row_action = lambda *a, **k: calls["row_actions"].append(a)
     plugin_api.register_search_provider = lambda *a, **k: calls["search"].append(a)
@@ -747,7 +749,8 @@ def main():
         f"_load_kea_sets: global reservations inside the subnet count, one outside it does not (got {sorted(res_out)})",
     )
     check(
-        any("l.expire > NOW()" in s for s in kdb.sql) and any("dhcp4_subnet_id IS NULL" in s for s in kdb.sql),
+        any("state = 0 AND expire > NOW()" in s for s in kdb.sql)
+        and any("dhcp4_subnet_id IS NULL" in s for s in kdb.sql),
         "_load_kea_sets: a lease must be unexpired, and the reservation query includes subnet-less hosts",
     )
     check(list(leases_out) == ["10.5.0.30"], "_load_kea_sets: the subnet's own lease is returned")
@@ -1169,6 +1172,42 @@ def main():
         p._investigate(ns(mac="", ip="", hostname="", leases4=[], reservations=[]), None, True) is None
         and db.sql == "",
         "_investigate: a subject with no address runs no query",
+    )
+
+    # ── 1.7.1: the address space treats only a CURRENT lease as in use (Jen's ACTIVE_LEASE4, never a bare state = 0) ──
+    q = load_plugin()
+    _stub_jen_plugin_api()
+    src = pathlib.Path(ROOT, "plugin.py").read_text(encoding="utf-8")
+    check("state=0" not in src and "state = 0" not in src, "the plugin never spells the current-lease predicate itself")
+
+    class _KeaDB:
+        def __init__(self):
+            self.sql = []
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            self.sql.append(" ".join(sql.split()))
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            pass
+
+    kea_db = _KeaDB()
+    q._kea_db = lambda: kea_db
+    q._load_kea_sets(1, "10.0.0.0/24")
+    check(
+        any("FROM lease4" in s and "state = 0 AND expire > NOW()" in s for s in kea_db.sql),
+        f"_load_kea_sets: the lease query asks for a current lease (got {kea_db.sql[:1]})",
     )
 
     if failures:

@@ -133,6 +133,13 @@ def _kea_db():
     return get_kea_db()
 
 
+def _active_lease4():
+    """Jen's one definition of a CURRENT lease (state 0 AND not past its expiry) - never spelled here (Jen 5.68.0, Q153)."""
+    from jen.plugin_api import ACTIVE_LEASE4
+
+    return ACTIVE_LEASE4
+
+
 def _accessible_subnets():
     from jen.plugin_api import get_accessible_subnet_map
 
@@ -370,13 +377,13 @@ def _load_kea_sets(subnet_id, cidr=None):
         db = _kea_db()
         with db.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT inet_ntoa(l.address) AS ip,
                        l.hostname,
                        HEX(l.hwaddr) AS mac_hex
                 FROM lease4 l
-                WHERE l.state=0 AND l.expire > NOW() AND l.subnet_id=%s
-            """,
+                WHERE {_active_lease4()} AND l.subnet_id=%s
+            """,  # nosec B608 - a fixed constant, the value is bound
                 (subnet_id,),
             )
             for row in cur.fetchall():

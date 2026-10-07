@@ -1,5 +1,13 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.7.1] - 2026-10-07
+
+Requires Jen 5.68.0 (a 5.68.0 beta satisfies it); the constant this release uses is exported by Jen 5.68.0-beta.18 and later.
+
+### Fixed: the address space's active leases
+
+The address space already treated only an unexpired lease as in use, but spelled the test itself. It now uses Jen's one definition of a current lease, `ACTIVE_LEASE4` (state 0 AND not past its expiry), exported through `jen.plugin_api`, so a change to what "current" means reaches IPAM too; the harness proves the query asks for it and that the plugin never spells the predicate itself. Behaviour is unchanged.
+
 ## [1.7.0] - 2026-10-04
 
 Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.
