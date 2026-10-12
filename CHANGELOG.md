@@ -1,5 +1,25 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.7.2] - 2026-10-12
+
+Cleanup; no change to what is shown or stored. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged: the helpers this release imports (`is_admin_or_above`, `safe_row`) are exported by `jen.plugin_api` in 5.68.0, the oldest Jen this plugin runs on.
+
+### Changed: two copied helpers are Jen's
+
+The plugin carried its own `_is_admin` (a call to `is_admin_or_above` with a fallback to reading `current_user.role` for a Jen that did not export it) and `_safe_row` (the CSV formula guard, with a hand-written fallback for a Jen without `safe_row`). Both fallbacks were dead code at this plugin's floor, and a private copy of a security guard is the kind that drifts, so the pages now ask `is_admin_or_above()` and the three CSV writers call `jen.plugin_api.safe_row` directly. The harness now proves an export of a hostname that starts with `=` comes out as text. `_require_write` is deliberately **kept**: the shared `plugin_api.require_write` decorator builds its redirect from an endpoint name alone, and a refused viewer here is sent back to the subnet page they posted from, which needs the route's own `kind` and `subnet_id`; replacing it would have changed where that person lands.
+
+### Changed: the bar-width stylesheet is defined once
+
+`index.html` and `subnet.html` each carried the same nine lines: the generated `.ip-w0` to `.ip-w100` width classes and the six `.ip-seg-*` colours, byte for byte. They now live in `templates/ipam/_bar_widths.html` and both pages `{% include %}` it inside their own `<style>` block. Rendering both pages before and after, the `<style>` block is byte-identical and the index page's whole output is identical.
+
+### Added: Investigate on every row that names a client
+
+An address row on the subnet page now carries Jen's Investigate action (the shared `investigate_link` macro), given the row's MAC, or its address when a dynamic, reserved, static, planned or conflict row has no MAC (a Kea identifier that is not a MAC, and an available address, get none). The import preview shows the action beside each MAC it is about to import.
+
+### Documented, not changed
+
+A released migration is never edited again, so these two are explained here and in the README instead. **Migration 1** was edited after it was released (in Jen 5.28.2, the release that made plugin migrations portable to MySQL 8): its `CREATE TABLE` lost the `UNIQUE` on `ip`, because migration 8 drops that index and a fresh install would otherwise create it to drop it a moment later. **Migration 8** (`DROP INDEX ip`) therefore fails on a fresh install with error 1091, which Jen's migration runner records as the change already being in effect (as it does for 1060 and 1061); an install that predates the edit still had the index and loses it there. `ipam_static_entries.created_at`, `ipam_subnets.created_at` and the `ipam_conflict_state` timestamps are written and never read; the README says so and nothing is dropped. `_normalize_mac` stays as a thin wrapper because blank is fine here and garbage is an error, where `plugin_api.normalize_mac` answers `None` for both.
+
 ## [1.7.1] - 2026-10-07
 
 Requires Jen 5.68.0 (a 5.68.0 beta satisfies it); the constant this release uses is exported by Jen 5.68.0-beta.18 and later.

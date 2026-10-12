@@ -38,6 +38,8 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
+from jen.plugin_api import is_admin_or_above, safe_row
+
 logger = logging.getLogger(__name__)
 
 bp = Blueprint(
@@ -152,19 +154,6 @@ def _assert_kea_access(subnet_id, notify=True):
     return assert_subnet_access(subnet_id, notify=notify)
 
 
-def _is_admin():
-    try:
-        from jen.plugin_api import is_admin_or_above
-
-        return is_admin_or_above()
-    except Exception:
-        # Fall back to a direct role check if the import shape ever changes.
-        role = getattr(current_user, "role", None)
-        if role is not None:
-            return role in ("superadmin", "admin")
-        return bool(getattr(current_user, "is_admin", False))
-
-
 def _require_write():
     """v1.5.2 — Jen's viewer tier is read-only everywhere else; IPAM's five
     write routes (save_entry, delete_entry, range_action, import_preview,
@@ -172,8 +161,12 @@ def _require_write():
     the role — the templates hid the buttons from viewers, but the routes
     themselves were open to anyone with subnet access. Every write route
     calls this FIRST, before _check_access and before touching
-    request.form/request.files."""
-    if _is_admin():
+    request.form/request.files.
+
+    This stays IPAM's own rather than plugin_api.require_write: a refused viewer is sent back to the subnet
+    page they posted from, and that URL needs the route's own `kind` and `subnet_id`, which the shared
+    decorator (it builds its redirect from an endpoint name alone) cannot supply."""
+    if is_admin_or_above():
         return True
     flash("Viewers can look at IPAM but not change it.", "error")
     return False
@@ -186,21 +179,6 @@ def _audit(action, target, detail):
         audit(action, target, detail)
     except Exception as e:
         logger.error(f"IPAM: audit failed: {e}")
-
-
-def _safe_row(values):
-    """Jen's CSV formula-injection guard (v5.30.0); a local copy of the
-    same rule when running against an older Jen."""
-    try:
-        from jen.plugin_api import safe_row
-
-        return safe_row(values)
-    except Exception:
-        out = []
-        for v in values:
-            s = "" if v is None else str(v)
-            out.append(f"'{s}" if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s)
-        return out
 
 
 def _normalize_mac(raw):
@@ -769,7 +747,7 @@ def _can_manage_unmanaged():
     (an unrestricted account). An unmanaged subnet belongs to no Kea subnet, so it is a global
     object: a scoped admin used to be able to create ones they could never see, delete one by a
     guessed id, and read hidden subnets' names and CIDRs out of the overlap messages."""
-    return _is_admin() and _can_see_unmanaged()
+    return is_admin_or_above() and _can_see_unmanaged()
 
 
 def _all_kea_subnets():
@@ -1052,7 +1030,7 @@ def index():
         subnet_map=subnet_map,
         ipam_subnets=ipam_subnets,
         summaries=summaries,
-        is_admin=_is_admin(),
+        is_admin=is_admin_or_above(),
         can_manage_unmanaged=_can_manage_unmanaged(),
     )
 
@@ -1162,7 +1140,7 @@ def subnet_detail(kind, subnet_id):
         recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
         open_ip=open_ip,
-        is_admin=_is_admin(),
+        is_admin=is_admin_or_above(),
     )
 
 
@@ -1250,12 +1228,12 @@ def export_csv(kind, subnet_id):
     def _stream():
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(_safe_row(header))
+        writer.writerow(safe_row(header))
         yield buf.getvalue()
         for values in _values():
             buf.seek(0)
             buf.truncate(0)
-            writer.writerow(_safe_row(values))
+            writer.writerow(safe_row(values))
             yield buf.getvalue()
 
     response = Response(stream_with_context(_stream()), mimetype="text/csv")
@@ -1277,7 +1255,7 @@ def history(kind, subnet_id):
         writer = csv.writer(output)
         writer.writerow(["when_utc", "ip", "action", "label", "owner", "by"])
         for r in rows:
-            writer.writerow(_safe_row([r["acted_at"], r["ip"], r["action"], r["label"], r["owner"], r["acted_by"]]))
+            writer.writerow(safe_row([r["acted_at"], r["ip"], r["action"], r["label"], r["owner"], r["acted_by"]]))
         safe_name = _FILENAME_SAFE_RE.sub("_", subnet["name"]).strip("_") or "subnet"
         response = make_response(output.getvalue())
         response.headers["Content-Type"] = "text/csv"
@@ -2152,10 +2130,8 @@ def _investigate(subject, accessible_subnet_ids, all_subnets):
 
 
 # ── JSON API (v1.6.0, plugin API v3) ──────────────────────────────────────────
-# Undecorated on purpose: api_key_required() is applied in register(app),
-# not here, so plugin.py's top level never imports jen.plugin_api — the
-# standalone harness (tools/test_plugin.py) stubs flask/flask_login only
-# and loads plugin.py with neither Jen nor a database on the path.
+# Undecorated on purpose: api_key_required() is applied in register(app), where each
+# route is added to the blueprint.
 
 api_bp = Blueprint("ipam_api", __name__, url_prefix="/api/v1/plugins/ipam")
 

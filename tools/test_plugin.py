@@ -10,6 +10,7 @@ range parsing, next-free) with hand-built inputs.
 Run: `python3 tools/test_plugin.py` (exit 1 on the first failing check).
 """
 
+import functools
 import importlib.util
 import ipaddress
 import os
@@ -61,6 +62,59 @@ class _FakeApp:
         pass
 
 
+# The role gate the real jen.plugin_api provides (`is_admin_or_above`, `is_superadmin`, `require_write`), reading the
+# stub current_user's role LIVE so a check can flip it. plugin.py imports them at the top, so they must exist before it
+# is loaded. A refusal is recorded (message, endpoint) and the route is not run, which is what the real decorator does
+# for a page request: flash, redirect, never touch the request.
+GATE_REFUSALS = []
+
+
+def _gate_is_admin_or_above():
+    return getattr(sys.modules["flask_login"].current_user, "role", None) in ("superadmin", "admin")
+
+
+def _gate_is_superadmin():
+    return getattr(sys.modules["flask_login"].current_user, "role", None) == "superadmin"
+
+
+def _gate_require_write(message="Viewers can look at this but not change it.", redirect_endpoint="dashboard.dashboard"):
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapped(*a, **k):
+            if _gate_is_admin_or_above():
+                return fn(*a, **k)
+            GATE_REFUSALS.append((message, redirect_endpoint))
+            return "refused"
+
+        return wrapped
+
+    return deco
+
+
+def _gate_safe_row(values):
+    """jen.services.csv_safe.safe_row, as the real jen.plugin_api re-exports it."""
+    return [
+        "" if v is None else (f"'{v}" if str(v) and str(v)[0] in ("=", "+", "-", "@", "\t", "\r") else str(v))
+        for v in values
+    ]
+
+
+def _install_gate_api(plugin_api=None):
+    """Put the gate functions on the stub jen.plugin_api (creating the stub package when none exists yet)."""
+    if plugin_api is None:
+        plugin_api = sys.modules.get("jen.plugin_api")
+        if plugin_api is None:
+            jen_pkg = types.ModuleType("jen")
+            plugin_api = types.ModuleType("jen.plugin_api")
+            jen_pkg.plugin_api = plugin_api
+            sys.modules["jen"] = jen_pkg
+            sys.modules["jen.plugin_api"] = plugin_api
+    plugin_api.is_admin_or_above = _gate_is_admin_or_above
+    plugin_api.is_superadmin = _gate_is_superadmin
+    plugin_api.require_write = _gate_require_write
+    plugin_api.safe_row = _gate_safe_row
+
+
 def _stub_jen_plugin_api():
     """A stub `jen.plugin_api` sufficient for register(app) to run end to end, enforcing the SAME
     two rules Jen's real one does: an alert type id must start with '<plugin_id>_', and a periodic job
@@ -103,6 +157,7 @@ def _stub_jen_plugin_api():
     plugin_api.api_key_required = lambda write=False: lambda fn: fn
     plugin_api.subnet_map = lambda: subnets
     plugin_api.api_key_can_access_subnet = api_key_can_access_subnet
+    _install_gate_api(plugin_api)
 
     def normalize_mac(raw):
         import re as _re
@@ -170,6 +225,7 @@ def _stub_jen_plugin_api():
 
 def load_plugin():
     _stub_modules()
+    _install_gate_api()
     spec = importlib.util.spec_from_file_location("ipam_plugin", os.path.join(ROOT, "plugin.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -454,11 +510,15 @@ def main():
     check(jen_rows == [], "jen import: derived statuses (infrastructure/conflict) are never re-imported")
 
     # ── csv guard fallback ───────────────────────────────────────────────────
-    check(p._safe_row(["=1+1", "ok", None]) == ["'=1+1", "ok", ""], "CSV formula guard (local fallback)")
+    src = pathlib.Path(ROOT, "plugin.py").read_text(encoding="utf-8")
+    check(
+        "def _safe_row" not in src and src.count("writer.writerow(safe_row(") == 3,
+        "CSV formula guard: the three CSV writers use jen.plugin_api's safe_row, with no local copy of it",
+    )
 
     # ── write gate (v1.5.2) — viewers can look at IPAM but not change it ────
     p.current_user.role = "viewer"
-    check(p._is_admin() is False, "a viewer is not admin")
+    check(p.is_admin_or_above() is False, "a viewer is not admin")
     check(p._require_write() is False, "a viewer cannot write")
     # request is None in this harness; a route that reaches request.form/
     # request.files raises AttributeError, so returning None without
@@ -477,7 +537,11 @@ def main():
             gated = False
         check(gated, f"{fn.__name__} refuses a viewer before touching the request")
     p.current_user.role = "admin"
-    check(p._is_admin() is True, "admin role restored for the rest of the run")
+    check(p.is_admin_or_above() is True, "admin role restored for the rest of the run")
+    check(
+        "def _is_admin" not in src,
+        "plugin.py no longer carries its own copy of the admin check (the write gate stays: its redirect needs the route's own kind and subnet_id)",
+    )
 
     # ── import byte cap (v1.5.2) ─────────────────────────────────────────────
     class _FakeUpload:
@@ -986,6 +1050,12 @@ def main():
         "export_csv: the streamed rows include the occupied addresses",
     )
     check("ip,status,hostname" in body, "export_csv: the header is the first streamed chunk")
+    p._load_kea_sets = lambda sid, cidr=None: ({"10.9.0.50": {"hostname": "=1+1", "mac": "aa:aa:aa:aa:aa:50"}}, {})
+    body = p.export_csv("kea", 9).get_data()
+    check(
+        "'=1+1" in body and ",=1+1" not in body,
+        "export_csv: a hostname that starts with = leaves the file as text, not a formula",
+    )
 
     # ── 1.6.6: the Create Reservation link carries subnet_id=, not subnet= ──
     # Jen's own add_reservation() route only ever reads subnet_id (subnet= is
@@ -1208,6 +1278,31 @@ def main():
     check(
         any("FROM lease4" in s and "state = 0 AND expire > NOW()" in s for s in kea_db.sql),
         f"_load_kea_sets: the lease query asks for a current lease (got {kea_db.sql[:1]})",
+    )
+
+    # ── 1.7.2: every row that names a client carries Jen's Investigate macro; the bar widths are defined once ──
+    tdir = pathlib.Path(ROOT, "templates", "ipam")
+    sub_html = (tdir / "subnet.html").read_text(encoding="utf-8")
+    prev_html = (tdir / "import_preview.html").read_text(encoding="utf-8")
+    index_html = (tdir / "index.html").read_text(encoding="utf-8")
+    shared_css = (tdir / "_bar_widths.html").read_text(encoding="utf-8")
+    macro_import = "{% from '_investigate.html' import investigate_link %}"
+    check(
+        macro_import in sub_html and 'investigate_link(who, "icon")' in sub_html,
+        "subnet.html: each address row that names a client carries Jen's Investigate macro (its MAC, else its address)",
+    )
+    check(
+        macro_import in prev_html and 'investigate_link(entry.mac, "icon")' in prev_html,
+        "import_preview.html: the MAC column carries Jen's Investigate macro",
+    )
+    check(
+        "{% for i in range(101) %}.ip-w{{ i }}" in shared_css
+        and shared_css.count(".ip-seg-") == 6
+        and "ip-w{{ i }}" not in sub_html
+        and "ip-w{{ i }}" not in index_html
+        and "{% include 'ipam/_bar_widths.html' %}" in sub_html
+        and "{% include 'ipam/_bar_widths.html' %}" in index_html,
+        "the .ip-w0 .. .ip-w100 and .ip-seg-* rules are defined once, in _bar_widths.html, and included by both pages",
     )
 
     if failures:

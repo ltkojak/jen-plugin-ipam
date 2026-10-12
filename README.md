@@ -18,6 +18,7 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 - **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease. A periodic check alerts once per new conflict (Settings → Alerts, type "IPAM Conflict") and emits an event for the Timeline
 - **Search + JSON API** — entries show up in Jen's global search by label, owner, IP or hostname; `GET/POST /api/v1/plugins/ipam/entries` and `GET /api/v1/plugins/ipam/next-free/<subnet_id>` for scripting, authenticated with a Jen API key and scoped to the subnets that key is allowed (a key with no scope reaches every subnet)
 - **"Open in IPAM"** row action on Jen's own Reservations page, linking straight to that address
+- **Investigate** on every address row that names a client (its MAC, or its address when a static or planned entry has no MAC) and beside each MAC in the import preview, Jen's own action for a row that names a client
 - **On the Investigation page** (Jen 5.68.0): a card under "What else Jen knows" with IPAM's entry for each address a client holds - static, planned or annotated - and whether the client is the one it was designated for; a conflict or a different designee is a "Needs a look" card
 - **Range…** — mark a from–to span planned/static (one label/owner) or clear it; leases and reservations are never overwritten
 - **Edit modal** — context-aware per IP status:
@@ -31,6 +32,14 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 - **CSV export** per subnet — Jen's own format and a Netbox-shaped one; every cell passes a formula-injection guard
 - **Assignment history** logged with user and timestamp (UTC), shown per address in the edit modal, in a Recent changes panel, and exportable
 - Respects Jen subnet access control: a user restricted to specific Kea subnets sees only those, and none of the unmanaged subnets; unmanaged subnet add/delete needs an admin who can see every subnet, and viewers are read-only: every change needs admin
+
+## Recorded for the audit trail, not displayed
+
+Some columns are written and never read back by this plugin, and are kept rather than dropped: `ipam_static_entries.created_at` and `ipam_subnets.created_at` (when the row was first made; shown nowhere, while `updated_at` is read to order search results), and `ipam_conflict_state.first_detected` and `last_seen` (the conflict check inserts a row the first time it alerts, refreshes `last_seen` while the conflict lasts and deletes the row when it clears; only the row's existence and key are read, to alert once per conflict). The per-address change history (`ipam_assignment_history`, including who made each change) is shown, exported and not affected.
+
+## Migration notes
+
+Two of the 16 migrations in `manifest.json` have an unusual history that a reader of the file should know. **Migration 1** was edited after it had been released: the original `CREATE TABLE` declared `ip VARCHAR(15) NOT NULL UNIQUE`, and Jen 5.28.2 (the release that made the plugin's migrations portable to MySQL 8) shipped it without the `UNIQUE`, because migration 8 drops that very index and a fresh install would otherwise create it only to drop it. A box that installed earlier ran the old statement and still has the index until migration 8 removes it; a box that installs now never has it. **Migration 8** (`ALTER TABLE ipam_static_entries DROP INDEX ip`) therefore fails on a fresh install with "can't DROP" (error 1091), and relies on Jen's migration runner treating that error, like duplicate column (1060) and duplicate key name (1061), as the change already being in effect and recording the migration as applied. A released migration is not rewritten again (it would fork what existing installs have already run); a new schema change is always a new numbered migration.
 
 ## Installation
 

@@ -1,0 +1,9 @@
+/* v1.6.1 — the bar segments carry their width as a class (ip-w0 .. ip-w100) instead of a
+   style attribute: the value is computed per render, so the classes are generated here. */
+{% for i in range(101) %}.ip-w{{ i }}{width:{{ i }}%}{% endfor %}
+.ip-seg-dyn{background:var(--primary)}
+.ip-seg-res{background:var(--success)}
+.ip-seg-sta{background:var(--warning)}
+.ip-seg-pla{background:#8b5cf6}
+.ip-seg-inf{background:var(--text-muted)}
+.ip-seg-con{background:var(--danger)}

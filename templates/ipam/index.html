@@ -52,15 +52,7 @@
 .ip-f045bb{color:var(--text)}
 .ip-fc84e9{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
 
-/* v1.6.1 — the bar segments carry their width as a class (ip-w0 .. ip-w100) instead of a
-   style attribute: the value is computed per render, so the classes are generated here. */
-{% for i in range(101) %}.ip-w{{ i }}{width:{{ i }}%}{% endfor %}
-.ip-seg-dyn{background:var(--primary)}
-.ip-seg-res{background:var(--success)}
-.ip-seg-sta{background:var(--warning)}
-.ip-seg-pla{background:#8b5cf6}
-.ip-seg-inf{background:var(--text-muted)}
-.ip-seg-con{background:var(--danger)}
+{% include 'ipam/_bar_widths.html' %}
 .ip-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
 .ip-hidden{display:none}
 </style>

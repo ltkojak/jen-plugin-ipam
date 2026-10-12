@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_investigate.html' import investigate_link %}
 {% block title %}IPAM — Import Preview{% endblock %}
 {% block content %}
 {% set unmanaged = (kind == 'u') %}
@@ -75,7 +76,7 @@
             {% else %}<span class="ip-5872de">○ Available</span>{% endif %}
         </td>
         <td class="ip-5e0faa">{{ entry.label or entry.hostname or '—' }}</td>
-        <td class="mono ip-865c33">{{ entry.mac or '—' }}</td>
+        <td class="mono ip-865c33">{{ entry.mac or '—' }}{% if entry.mac %} {{ investigate_link(entry.mac, "icon") }}{% endif %}</td>
         <td class="ip-865c33">{{ entry.owner or '—' }}</td>
         <td class="ip-90b7fd">{{ entry.notes or '—' }}</td>
     </tr>
