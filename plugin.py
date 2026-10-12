@@ -1141,6 +1141,8 @@ def subnet_detail(kind, subnet_id):
         status_filter=status_filter,
         open_ip=open_ip,
         is_admin=is_admin_or_above(),
+        can_write=is_admin_or_above(),
+        can_manage_unmanaged=_can_manage_unmanaged(),
     )
 
 

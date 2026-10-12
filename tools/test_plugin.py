@@ -1305,6 +1305,214 @@ def main():
         "the .ip-w0 .. .ip-w100 and .ip-seg-* rules are defined once, in _bar_widths.html, and included by both pages",
     )
 
+    # ── 1.7.3: a viewer is not shown a write control; the page is handed the truth the routes use ──
+    # The routes refuse a viewer (_require_write / _can_manage_unmanaged); the template used to print Range, Import,
+    # the per-row edit pencil and Create Reservation anyway, each leading only to "you cannot do that".
+    p._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.9.0.0/24"}
+    p._subnet_ctx = lambda kind, sid, subnet: ctx_big
+    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    p._load_entries = lambda kind, sid: {}
+    p._history_rows = lambda *a, **k: []
+    p.render_template = lambda name, **kw: kw
+    p.request = types.SimpleNamespace(args={}, form={})
+    p._accessible_subnets = dict
+    p._get_ipam_subnets = dict
+    # register(): above rebuilt the stub flask_login, so the role gate reads the NEWEST current_user while p keeps the
+    # one it imported; a faithful session sets both.
+    gate_user = sys.modules["flask_login"].current_user
+    saved_role, saved_all = gate_user.role, p.current_user.all_subnets
+    seen = {}
+    for who, role, all_subnets in (
+        ("viewer", "viewer", True),
+        ("scoped admin", "admin", False),
+        ("admin", "admin", True),
+        ("superadmin", "superadmin", True),
+    ):
+        gate_user.role, p.current_user.all_subnets = role, all_subnets
+        seen[who] = (p.subnet_detail("kea", 9), p.index())
+    gate_user.role, p.current_user.all_subnets = saved_role, saved_all
+    check(
+        seen["viewer"][0]["can_write"] is False and seen["viewer"][0]["can_manage_unmanaged"] is False,
+        "subnet_detail: a viewer is handed can_write=False and can_manage_unmanaged=False",
+    )
+    check(
+        seen["admin"][0]["can_write"] is True and seen["superadmin"][0]["can_write"] is True,
+        "subnet_detail: an admin and a superadmin are handed can_write=True",
+    )
+    check(
+        seen["admin"][0]["can_manage_unmanaged"] is True and seen["scoped admin"][0]["can_manage_unmanaged"] is False,
+        "subnet_detail: can_manage_unmanaged is the route's own rule (an admin who sees every subnet), not the role alone",
+    )
+    check(
+        seen["scoped admin"][0]["can_write"] is True,
+        "subnet_detail: a subnet-scoped admin still writes Kea-subnet entries (_require_write is role-only)",
+    )
+    check(
+        seen["viewer"][1]["can_manage_unmanaged"] is False and seen["admin"][1]["can_manage_unmanaged"] is True,
+        "index: Add Unmanaged Subnet is gated by the route's own rule",
+    )
+
+    try:
+        import jinja2
+    except ImportError:  # the harness is stdlib-only; verify.py (which needs jinja2) parses the templates anyway
+        jinja2 = None
+    if jinja2 is not None:
+        macro = (
+            '{% macro investigate_link(who, kind="menu") -%}{%- if who -%}'
+            '<a href="/client?q={{ who|urlencode }}" class="btn btn-sm btn-secondary">{{ icon("search") }}</a>'
+            "{%- endif -%}{%- endmacro %}"
+        )
+        tpl_dir = pathlib.Path(ROOT, "templates", "ipam")
+        env = jinja2.Environment(
+            loader=jinja2.DictLoader(
+                {
+                    "base.html": "{% block title %}{% endblock %}{% block content %}{% endblock %}",
+                    "_investigate.html": macro,
+                    "ipam/_bar_widths.html": (tpl_dir / "_bar_widths.html").read_text(encoding="utf-8"),
+                    "ipam/subnet.html": (tpl_dir / "subnet.html").read_text(encoding="utf-8"),
+                    "ipam/index.html": (tpl_dir / "index.html").read_text(encoding="utf-8"),
+                    "ipam/import_preview.html": (tpl_dir / "import_preview.html").read_text(encoding="utf-8"),
+                }
+            ),
+            autoescape=True,
+        )
+        env.globals.update(
+            icon=lambda *a, **k: "[icon]", csrf_token=lambda: "t", url_for=lambda *a, **k: "/x", csp_nonce="n"
+        )
+        counts = {
+            "total": 2,
+            "available": 1,
+            "dynamic": 0,
+            "reserved": 0,
+            "static": 1,
+            "planned": 0,
+            "infrastructure": 0,
+            "conflict": 0,
+            "pct": 50,
+        }
+        entries = [
+            {
+                "ip": "10.9.0.5",
+                "status": "static",
+                "hostname": "",
+                "label": "nas",
+                "mac": "aa:bb:cc:dd:ee:05",
+                "owner": "",
+                "notes": "",
+                "device": None,
+                "in_pool": False,
+                "designated": "static",
+            },
+            {
+                "ip": "10.9.0.6",
+                "status": "available",
+                "hostname": "",
+                "label": "",
+                "mac": "",
+                "owner": "",
+                "notes": "",
+                "device": None,
+                "in_pool": False,
+                "designated": "",
+            },
+        ]
+
+        def render_subnet(kind, can_write, can_manage):
+            return env.get_template("ipam/subnet.html").render(
+                kind=kind,
+                subnet_id=9,
+                subnet={"name": "lan", "cidr": "10.9.0.0/24", "description": ""},
+                rows=entries,
+                collapsed=False,
+                counts=counts,
+                ctx={"gateways": [], "dns": [], "notes": ""},
+                pool_texts=[],
+                next_free="10.9.0.6",
+                recent_history=[],
+                status_filter="all",
+                open_ip="",
+                is_admin=can_write,
+                can_write=can_write,
+                can_manage_unmanaged=can_manage,
+            )
+
+        write_controls = (
+            ('id="ipam-range-btn"', "the Range button"),
+            ('id="ipam-import-btn"', "the Import button"),
+            ("ipam-edit-btn", "the per-row edit pencil"),
+            ("/reservations/add?", "the Create Reservation link"),
+            ('id="edit-modal"', "the edit modal"),
+            ('id="range-modal"', "the range modal"),
+            ('id="import-modal"', "the import modal"),
+            ('id="clear-form"', "the clear form"),
+            ("openEditModal", "the edit script"),
+        )
+        viewer_page = render_subnet("kea", False, False)
+        admin_page = render_subnet("kea", True, False)
+        for marker, what in write_controls:
+            check(marker not in viewer_page, f"subnet.html as a viewer: {what} is absent")
+            check(marker in admin_page, f"subnet.html as an admin: {what} is present")
+        check(
+            "ipam-delete-subnet-btn" not in viewer_page and "ipam-delete-subnet-btn" not in admin_page,
+            "subnet.html: a Kea subnet never shows Delete Subnet",
+        )
+        check(
+            'id="ipam-search"' in viewer_page
+            and 'data-filter="static"' in viewer_page
+            and "/client?q=aa%3Abb%3Acc%3Add%3Aee%3A05" in viewer_page
+            and "Next free: 10.9.0.6" in viewer_page,
+            "subnet.html as a viewer: the search, the filters, Investigate and Next free are all still there",
+        )
+        check(
+            "getElementById('edit-" not in viewer_page
+            and "getElementById('range-" not in viewer_page
+            and "getElementById('import-" not in viewer_page
+            and "getElementById('clear-" not in viewer_page,
+            "subnet.html as a viewer: no script reaches for a control that is not on the page",
+        )
+        check(
+            "[icon] CSV</a>" in viewer_page and "[icon] Netbox CSV</a>" in viewer_page,
+            "subnet.html as a viewer: the CSV export links are reads and stay",
+        )
+        # unmanaged: Delete Subnet follows _can_manage_unmanaged, not the role alone
+        check(
+            "ipam-delete-subnet-btn" in render_subnet("u", True, True)
+            and "subnet-delete-form" in render_subnet("u", True, True),
+            "subnet.html as an unrestricted admin on an unmanaged subnet: Delete Subnet and its form are present",
+        )
+        check(
+            "ipam-delete-subnet-btn" not in render_subnet("u", False, False)
+            and "subnet-delete-form" not in render_subnet("u", False, False),
+            "subnet.html as a viewer on an unmanaged subnet: Delete Subnet and its form are absent",
+        )
+        check(
+            "ipam-delete-subnet-btn" not in render_subnet("u", True, False),
+            "subnet.html as a scoped admin on an unmanaged subnet: Delete Subnet is absent (the route would refuse it)",
+        )
+
+        def render_index(can_manage):
+            return env.get_template("ipam/index.html").render(
+                subnet_map={},
+                ipam_subnets={},
+                summaries={},
+                is_admin=can_manage,
+                can_manage_unmanaged=can_manage,
+                ipv6_enabled=False,
+            )
+
+        check(
+            "ipam-add-subnet-btn" not in render_index(False) and "add-subnet-modal" not in render_index(False),
+            "index.html as a viewer: Add Unmanaged Subnet and its modal are absent",
+        )
+        check(
+            "ipam-add-subnet-btn" in render_index(True) and "add-subnet-modal" in render_index(True),
+            "index.html as an unrestricted admin: Add Unmanaged Subnet and its modal are present",
+        )
+        check(
+            "import_commit" in (tpl_dir / "import_preview.html").read_text(encoding="utf-8"),
+            "import_preview.html: only ever rendered by import_preview, a route that refuses a viewer first (no gate needed)",
+        )
+
     if failures:
         print(f"\n{len(failures)} check(s) failed")
         return 1

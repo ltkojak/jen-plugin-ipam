@@ -1,5 +1,21 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.7.3] - 2026-10-12
+
+A viewer is no longer shown controls the plugin will refuse. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged, and no route, query or stored value changes.
+
+### Fixed: the subnet page showed its write controls to a read-only account
+
+IPAM's five write routes (`save_entry`, `delete_entry`, `range_action`, `import_preview`, `import_commit`) refuse a viewer, and the plugin's own comments say the templates hide the buttons from one. They did not: the subnet page printed Range, Import, the per-row edit pencil and the Create Reservation link to everyone, so a viewer clicked a control and was told "Viewers can look at IPAM but not change it." (or, for Create Reservation, was sent to a Jen page only an admin may open). An independent review of the rendered pages as a viewer account found it. The page was only ever as honest as one `is_admin` variable, which gated the unmanaged Delete Subnet button and nothing else.
+
+The subnet route now hands the template two answers computed with the SAME predicates the routes use, not a second opinion about the role: `can_write` is `is_admin_or_above()` (exactly what `_require_write` asks) and `can_manage_unmanaged` is `_can_manage_unmanaged()` (exactly what `add_subnet` and `delete_subnet` ask, so an admin whose account is limited to some subnets no longer sees a Delete Subnet button the route would refuse). Everything a write needs is wrapped in `can_write`: the Range and Import buttons, the edit pencil on every row, the Create Reservation link, the edit, range and import modals, the hidden clear form, and the script that wires them. The script is gated with the controls it binds, so a viewer's page does not run code that reaches for an element that is no longer there. The overview page already gated Add Unmanaged Subnet and its modal by `can_manage_unmanaged`, and the import preview is only ever rendered by a route that has refused a viewer first, so neither changes.
+
+A viewer keeps every read control: the search box, the status filters, expanding a run, Next free, both CSV exports, Recent changes, the View Lease and View Reservation links and the Investigate link on every row that names a client. An admin's page is unchanged. One thing a viewer no longer sees is the per-address history that used to load inside the edit modal; the subnet's Recent changes list and the history CSV remain.
+
+### Tested
+
+`tools/test_plugin.py` renders `subnet.html` and `index.html` through the real Jinja as a viewer, an admin, a subnet-scoped admin and a superadmin, and asserts every write control above is absent for the viewer and present for the admin, that no script reaches for an absent control, that Delete Subnet follows `can_manage_unmanaged` and not the role alone, and that the read controls and Investigate links stay. It also calls the real `subnet_detail` and `index` routes as each role and checks the two variables they hand the page.
+
 ## [1.7.2] - 2026-10-12
 
 Cleanup; no change to what is shown or stored. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged: the helpers this release imports (`is_admin_or_above`, `safe_row`) are exported by `jen.plugin_api` in 5.68.0, the oldest Jen this plugin runs on.

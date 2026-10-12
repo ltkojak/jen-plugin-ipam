@@ -24,11 +24,13 @@
         {% if next_free %}
         <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">{{ icon("zap") }} Next free: {{ next_free }}</a>
         {% endif %}
+        {% if can_write %}
         <button id="ipam-range-btn" class="btn btn-secondary btn-sm">⇔ Range…</button>
         <button id="ipam-import-btn" class="btn btn-secondary btn-sm">{{ icon("upload") }} Import</button>
+        {% endif %}
         <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">{{ icon("download") }} CSV</a>
         <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">{{ icon("download") }} Netbox CSV</a>
-        {% if unmanaged and is_admin %}
+        {% if unmanaged and can_manage_unmanaged %}
         <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm ip-497726">{{ icon("trash") }} Delete Subnet</button>
         {% endif %}
         <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
@@ -250,13 +252,15 @@
         </td>
         <td class="ip-86abda" data-m="trailing">
             <div class="ip-c8a208">
+                {% if can_write %}
                 <button class="btn btn-sm btn-secondary ipam-edit-btn" title="Edit" aria-label="Edit"
                         data-entry='{{ entry|tojson }}'>{{ icon("pencil") }}</button>
+                {% endif %}
                 {%- set who = entry.mac if (entry.mac and not entry.mac.startswith('id:')) else (entry.ip if entry.status in ('dynamic', 'reserved', 'static', 'planned', 'conflict') else '') %}
                 {{ investigate_link(who, "icon") }}
 
                 {% if not unmanaged %}
-                {% if entry.status in ('available', 'static', 'planned', 'conflict') %}
+                {% if can_write and entry.status in ('available', 'static', 'planned', 'conflict') %}
                 <a href="/reservations/add?ip={{ entry.ip|urlencode }}&subnet_id={{ subnet_id|urlencode }}{% if entry.mac and not entry.mac.startswith('id:') %}&mac={{ entry.mac|urlencode }}{% endif %}"
                    class="btn btn-sm btn-secondary ip-dd269a" title="Create Reservation" aria-label="Create Reservation">
                     {{ icon("pin") }}
@@ -302,6 +306,7 @@
 </details>
 {% endif %}
 
+{% if can_write %}
 <!-- Edit Modal -->
 <div id="edit-modal" class="ip-modal">
 <div class="ip-755013">
@@ -462,8 +467,9 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="ip" id="clear-ip-input">
 </form>
+{% endif %}
 
-{% if unmanaged and is_admin %}
+{% if unmanaged and can_manage_unmanaged %}
 <!-- Hidden subnet delete form -->
 <form id="subnet-delete-form" method="POST"
       action="{{ url_for('ipam.delete_subnet', subnet_id=subnet_id) }}" class="ip-hidden">
@@ -561,6 +567,7 @@ document.getElementById('filter-tabs').addEventListener('click', function(e) {
     }
 });
 
+{% if can_write %}
 // ── Edit modal ────────────────────────────────────────────────────────────────
 function _escape(s) {
     return String(s).replace(/[&<>"']/g, function(c) {
@@ -702,8 +709,9 @@ document.getElementById('ipam-import-btn').addEventListener('click', function() 
 document.getElementById('import-modal-close-btn').addEventListener('click', function() { _modal('import-modal', false); });
 document.getElementById('import-modal-cancel-btn').addEventListener('click', function() { _modal('import-modal', false); });
 document.getElementById('import-modal').addEventListener('click', function(e) { if (e.target === this) _modal('import-modal', false); });
+{% endif %}
 
-{% if unmanaged and is_admin %}
+{% if unmanaged and can_manage_unmanaged %}
 function deleteSubnet() {
     jenConfirm('Delete this unmanaged subnet and ALL its IPAM entries? This cannot be undone.', function() {
         document.getElementById('subnet-delete-form').submit();
@@ -712,6 +720,7 @@ function deleteSubnet() {
 document.getElementById('ipam-delete-subnet-btn').addEventListener('click', deleteSubnet);
 {% endif %}
 
+{% if can_write %}
 document.getElementById('edit-modal').addEventListener('click', function(e) {
     if (e.target === this) closeEditModal();
 });
@@ -722,6 +731,7 @@ document.addEventListener('keydown', function(e) {
         _modal('import-modal', false);
     }
 });
+{% endif %}
 
 // Apply initial filter state on load — status_filter is always a single
 // value from the URL (?filter=static etc., or "all" by default).
@@ -735,11 +745,13 @@ filterTable();
 
 // v1.5.0 — ?ip=… (Discovery's "Add IPAM entry", the Next-free button)
 // opens the edit modal on that address.
+{% if can_write %}
 if (OPEN_IP) {
     var _row = document.querySelector('#ipam-table tbody tr[data-ip="' + OPEN_IP + '"]');
     var _btn = _row && _row.querySelector('.ipam-edit-btn');
     if (_btn) { _row.scrollIntoView({block: 'center'}); openEditModal(_btn); }
 }
+{% endif %}
 </script>
 
 {% endblock %}
