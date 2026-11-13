@@ -550,9 +550,9 @@ _MAP_CLASS = {
 
 
 def _map_cells(space):
-    """Pure: an already-built space as map cells, in address order - `{"ip", "status", "cls"}`. `cls` is
-    the whole class attribute: `ip-cell`, the status's bar class (none for an available address) and
-    `ip-cell-pool` for an address inside a DHCP pool."""
+    """Pure: an already-built space as map cells, in address order - `{"ip", "octet", "status", "cls"}`.
+    `octet` is the last octet, the text the cell shows. `cls` is the whole class attribute: `ip-cell`, the
+    status's bar class (none for an available address) and `ip-cell-pool` for an address inside a DHCP pool."""
     cells = []
     for e in space:
         classes = ["ip-cell"]
@@ -560,8 +560,32 @@ def _map_cells(space):
             classes.append(_MAP_CLASS[e["status"]])
         if e["in_pool"]:
             classes.append("ip-cell-pool")
-        cells.append({"ip": e["ip"], "status": e["status"], "cls": " ".join(classes)})
+        cells.append(
+            {"ip": e["ip"], "octet": e["ip"].rsplit(".", 1)[1], "status": e["status"], "cls": " ".join(classes)}
+        )
     return cells
+
+
+def _map_blocks(network, cells):
+    """Pure: the map's cells grouped for drawing (v1.8.2) - one block per /24 the subnet covers, each
+    `{"label", "cells"}`. `label` is the block's first address (the subnet's own for a subnet inside one
+    /24). `cells` holds one entry per address of the block, in order, so a row of 32 always starts on the
+    block's first address: a cell from `cells`, or None where the address is not a host (the network and
+    the broadcast address), which is drawn as a gap. None in, None out: a subnet above a /22 has no map."""
+    if not cells:
+        return None
+    by_ip = {c["ip"]: c for c in cells}
+    first, last = int(network.network_address), int(network.broadcast_address)
+    blocks = []
+    for start in range(first - first % 256, last + 1, 256):
+        low, high = max(start, first), min(start + 255, last)
+        blocks.append(
+            {
+                "label": str(ipaddress.IPv4Address(low)),
+                "cells": [by_ip.get(str(ipaddress.IPv4Address(n))) for n in range(low, high + 1)],
+            }
+        )
+    return blocks
 
 
 def _address_map(network, active_leases, reservations, ipam_entries, ctx):
@@ -1186,6 +1210,7 @@ def subnet_detail(kind, subnet_id):
         open_ip=open_ip,
         at_ip=at_ip,
         address_map=address_map,
+        map_blocks=_map_blocks(network, address_map),
         is_admin=is_admin_or_above(),
         can_write=is_admin_or_above(),
         can_manage_unmanaged=_can_manage_unmanaged(),

@@ -1,5 +1,19 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.2] - 2026-11-13
+
+### Changed: the address map is redrawn
+
+The map of 1.8.0 stretched its cells to fill the card. On a wide screen each cell was a 40 px square, a /23 was taller than the screen and pushed the table off the page, and every address in a DHCP pool wore a heavy outline that was the loudest thing on the page. The redesign is the maintainer's: put the last octet in the box, and mark where each /24 starts.
+
+- **The last octet is in the cell.** A cell reads `49`, not a blank square to be clicked and found out. Still 32 to a row, and a row always starts on a multiple of 32: the network and the broadcast address are not hosts and are drawn as gaps, so `.32` sits under `.0` and `.64` under `.32`.
+- **A heading at the start of each /24.** A /23 at 10.10.10.0 is drawn as two blocks, headed `10.10.10.0` and `10.10.11.0`; a /22 is four. A subnet inside one /24 has one heading, its own first address.
+- **A cell is 20 px tall whatever the width of the card.** The /23 that was 740 px tall is about 400. In a card narrower than 860 px the rows are 16 cells, so the numbers stay readable on a tablet and on a printed page; on a phone (below 480 px) the map is hidden, as before.
+- **A pool is a tint.** A free address inside a DHCP pool has a soft tint of the primary color and no outline; a used one shows its status color alone. The legend's key reads "Available, in a DHCP pool".
+- **Free addresses are quiet.** An available cell is the plain surface with a muted number, so the colored cells carry the picture.
+
+A click still finds the address's row, `?at=` still expands a collapsed run, and the /22 ceiling stands. `plugin.py` gains `_map_blocks` (pure) and each cell an `octet`; `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged, nothing stored changes and no new query runs.
+
 ## [1.8.1] - 2026-11-13
 
 ### Fixed: a printout keeps the address map

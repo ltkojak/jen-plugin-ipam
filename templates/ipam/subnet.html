@@ -103,14 +103,19 @@
 
 /* v1.8.0 - the address map. A cell's color is its status's bar class, so these rules sit BEFORE the
    include below: at equal specificity the later rule wins, and the bar class must beat `.ip-cell`. */
-.ip-map-block{margin-bottom:14px}
-.ip-map{display:grid;grid-template-columns:repeat(32,1fr);gap:2px}
-.ip-cell{display:block;aspect-ratio:1;box-sizing:border-box;border:1px solid var(--border);border-radius:2px;background-color:var(--surface2)}
-.ip-cell-pool{border:2px solid var(--text)}
+.ip-map-block{margin-bottom:14px;container-type:inline-size}
+.ip-map-head{font-family:monospace;font-size:12px;font-weight:600;color:var(--text);margin:10px 0 4px}
+.ip-map-head:first-child{margin-top:0}
+.ip-map{display:grid;grid-template-columns:repeat(32,minmax(0,1fr));gap:2px;max-width:1340px}
+.ip-cell{display:flex;align-items:center;justify-content:center;height:20px;box-sizing:border-box;border:1px solid var(--border);border-radius:3px;background-color:var(--surface2);color:var(--text-muted);font-family:monospace;font-size:11px;line-height:1;text-decoration:none;overflow:hidden}
+.ip-cell-pool{background-color:color-mix(in srgb,var(--primary) 18%,var(--surface2));border-color:transparent;color:var(--text)}
+.ip-map .ip-cell[class*="ip-seg-"]{border-color:transparent;color:#000}
+.ip-map .ip-cell.ip-seg-pla,.ip-map .ip-cell.ip-seg-inf,.ip-map .ip-cell.ip-seg-con{color:#fff}
 .ip-cell:hover,.ip-cell:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+@container (max-width:859px){.ip-map{grid-template-columns:repeat(16,minmax(0,1fr))}}
 .ip-map-legend{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--text-muted);margin-top:8px}
 .ip-key{display:inline-block;width:10px;height:10px;box-sizing:border-box;border:1px solid var(--border);border-radius:2px;background-color:var(--surface2);vertical-align:middle;margin-right:4px}
-.ip-key.ip-cell-pool{border:2px solid var(--text)}
+.ip-key.ip-cell-pool{background-color:color-mix(in srgb,var(--primary) 18%,var(--surface2));border-color:transparent}
 #ipam-table tbody tr.ip-at td{background:var(--surface2);box-shadow:inset 0 2px 0 var(--primary),inset 0 -2px 0 var(--primary)}
 @media screen and (max-width:479px){.ip-map-block{display:none}}
 {% include 'ipam/_bar_widths.html' %}
@@ -174,11 +179,15 @@
         </div>
     </div>
 
-    {% if address_map %}
-    <!-- Address map (v1.8.0): one cell per host address, up to a /22 -->
+    {% if map_blocks %}
+    <!-- Address map (v1.8.0; redrawn in v1.8.2): one cell per host address with its last octet in it,
+         32 to a row, a heading at the start of each /24, up to a /22 -->
     <div class="ip-map-block">
-        <div id="ipam-map" class="ip-map" role="group" aria-label="Address map">
-            {% for c in address_map %}<a class="{{ c.cls }}" href="?at={{ c.ip }}" data-ip="{{ c.ip }}" aria-label="{{ c.ip }} {{ c.status }}"></a>{% endfor %}
+        <div id="ipam-map" role="group" aria-label="Address map">
+            {% for b in map_blocks %}
+            <div class="ip-map-head">{{ b.label }}</div>
+            <div class="ip-map">{% for c in b.cells %}{% if c %}<a class="{{ c.cls }}" href="?at={{ c.ip }}" data-ip="{{ c.ip }}" aria-label="{{ c.ip }} {{ c.status }}">{{ c.octet }}</a>{% else %}<span></span>{% endif %}{% endfor %}</div>
+            {% endfor %}
         </div>
         <div class="ip-map-legend">
             <span><i class="ip-key"></i>Available</span>
@@ -190,7 +199,7 @@
             <span><i class="ip-key ip-seg-pla"></i>Planned</span>
             <span><i class="ip-key ip-seg-inf"></i>Infrastructure</span>
             {% if counts.conflict %}<span><i class="ip-key ip-seg-con"></i>Conflict</span>{% endif %}
-            {% if pool_texts %}<span><i class="ip-key ip-cell-pool"></i>Inside a DHCP pool</span>{% endif %}
+            {% if pool_texts %}<span><i class="ip-key ip-cell-pool"></i>Available, in a DHCP pool</span>{% endif %}
             <span>Click an address to find its row.</span>
         </div>
     </div>

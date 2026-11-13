@@ -1434,6 +1434,7 @@ def main():
                 open_ip="",
                 at_ip="",
                 address_map=None,
+                map_blocks=None,
                 is_admin=can_write,
                 can_write=can_write,
                 can_manage_unmanaged=can_manage,
@@ -1586,8 +1587,8 @@ def main():
     m.request = types.SimpleNamespace(args={}, form={})
     page = m.subnet_detail("kea", 9)
     check(
-        page["address_map"] == cells and page["at_ip"] is None,
-        "subnet_detail: the collapsed page is handed the map, and no address to find",
+        page["address_map"] == cells and page["map_blocks"] == m._map_blocks(map_net, cells) and page["at_ip"] is None,
+        "subnet_detail: the collapsed page is handed the map and its blocks, and no address to find",
     )
     check(
         not any(not r.get("run") and r["ip"] == "10.7.0.150" for r in page["rows"]),
@@ -1613,7 +1614,64 @@ def main():
     m.request = types.SimpleNamespace(args={}, form={})
     check(m.subnet_detail("kea", 9)["address_map"] is None, "subnet_detail: a /21 is handed no map")
 
+    # 1.8.2: the cells grouped for drawing - a block per /24, a gap where an address is not a host
+    blocks = m._map_blocks(map_net, cells)
+    check(
+        len(blocks) == 1
+        and blocks[0]["label"] == "10.7.0.0"
+        and len(blocks[0]["cells"]) == 256
+        and blocks[0]["cells"][0] is None
+        and blocks[0]["cells"][255] is None
+        and [c for c in blocks[0]["cells"] if c] == cells,
+        "blocks: a /24 is one block of 256 places, the network and the broadcast address empty, every cell in order",
+    )
+    check(
+        all(c["octet"] == c["ip"].rsplit(".", 1)[1] for c in cells) and cells[99]["octet"] == "100",
+        "cells: each carries its last octet",
+    )
+    wide_net = ipaddress.IPv4Network("10.10.10.0/23")
+    wide_cells = m._address_map(wide_net, {}, {}, {}, map_ctx)
+    wide = m._map_blocks(wide_net, wide_cells)
+    check(
+        [b["label"] for b in wide] == ["10.10.10.0", "10.10.11.0"]
+        and [len(b["cells"]) for b in wide] == [256, 256]
+        and wide[0]["cells"][0] is None
+        and wide[0]["cells"][255]["ip"] == "10.10.10.255"
+        and wide[1]["cells"][0]["ip"] == "10.10.11.0"
+        and wide[1]["cells"][255] is None,
+        "blocks: a /23 is two blocks; .255 of the first and .0 of the second are hosts and are drawn",
+    )
+    small_net = ipaddress.IPv4Network("10.8.0.64/26")
+    small = m._map_blocks(small_net, m._address_map(small_net, {}, {}, {}, map_ctx))
+    check(
+        len(small) == 1
+        and small[0]["label"] == "10.8.0.64"
+        and len(small[0]["cells"]) == 64
+        and small[0]["cells"][1]["octet"] == "65",
+        "blocks: a /26 is one block that starts at its own first address",
+    )
+    big_net = ipaddress.IPv4Network("10.8.0.0/22")
+    check(
+        [b["label"] for b in m._map_blocks(big_net, m._address_map(big_net, {}, {}, {}, map_ctx))]
+        == ["10.8.0.0", "10.8.1.0", "10.8.2.0", "10.8.3.0"],
+        "blocks: a /22 is four blocks",
+    )
+    check(m._map_blocks(map_net, None) is None, "blocks: no cells (above a /22), no blocks")
+
     map_html = pathlib.Path(ROOT, "templates", "ipam", "subnet.html").read_text(encoding="utf-8")
+    check(
+        "aspect-ratio" not in map_html
+        and ".ip-map{display:grid;grid-template-columns:repeat(32,minmax(0,1fr))" in map_html
+        and "@container (max-width:859px){.ip-map{grid-template-columns:repeat(16,minmax(0,1fr))}}" in map_html
+        and ".ip-map-block{margin-bottom:14px;container-type:inline-size}" in map_html
+        and "height:20px" in map_html,
+        "subnet.html (1.8.2): a cell is 20 px tall whatever the card's width, 32 to a row, 16 in a narrow card",
+    )
+    check(
+        ".ip-cell-pool{border:2px" not in map_html
+        and "color-mix(in srgb,var(--primary) 18%,var(--surface2))" in map_html,
+        "subnet.html (1.8.2): a pool is a tint on its free cells, never an outline",
+    )
     check(
         map_html.index(".ip-cell{") < map_html.index("{% include 'ipam/_bar_widths.html' %}"),
         "subnet.html: the map's rules come before the bar classes, so a status color beats the cell's own background",
@@ -1645,6 +1703,7 @@ def main():
                 open_ip="",
                 at_ip=at_ip,
                 address_map=address_map,
+                map_blocks=m._map_blocks(map_net, address_map),
                 is_admin=False,
                 can_write=False,
                 can_manage_unmanaged=False,
@@ -1653,9 +1712,51 @@ def main():
         drawn = render_map("kea", cells, at_ip="10.7.0.150")
         check(drawn.count('<a class="ip-cell') == 254, "subnet.html: one cell per address")
         check(
-            '<a class="ip-cell ip-seg-dyn ip-cell-pool" href="?at=10.7.0.100" data-ip="10.7.0.100" aria-label="10.7.0.100 dynamic"></a>'
+            '<a class="ip-cell ip-seg-dyn ip-cell-pool" href="?at=10.7.0.100" data-ip="10.7.0.100" aria-label="10.7.0.100 dynamic">100</a>'
             in drawn,
-            "subnet.html: a cell is a link to ?at=<its address>, named for a screen reader, colored and outlined by class",
+            "subnet.html: a cell is a link to ?at=<its address>, named for a screen reader, colored by class, with its last octet in it",
+        )
+        map_part = drawn.split('id="ipam-map"')[1].split('class="ip-map-legend"')[0]
+        check(
+            map_part.count('<div class="ip-map-head">') == 1
+            and '<div class="ip-map-head">10.7.0.0</div>' in map_part
+            and map_part.count('<div class="ip-map">') == 1,
+            "subnet.html (1.8.2): a /24 is one block under one heading, its first address",
+        )
+        check(
+            map_part.count("<span></span>") == 2
+            and '<div class="ip-map"><span></span><a class="ip-cell ip-seg-inf" href="?at=10.7.0.1"' in map_part
+            and '">254</a><span></span></div>' in map_part,
+            "subnet.html (1.8.2): the network and the broadcast address are gaps, so a row starts on a multiple of 32",
+        )
+        two = env.get_template("ipam/subnet.html").render(
+            kind="kea",
+            subnet_id=9,
+            subnet={"name": "lan", "cidr": "10.10.10.0/23", "description": ""},
+            rows=entries,
+            collapsed=True,
+            counts=counts,
+            ctx={"gateways": [], "dns": [], "notes": ""},
+            pool_texts=[],
+            next_free="",
+            recent_history=[],
+            status_filter="all",
+            open_ip="",
+            at_ip="",
+            address_map=wide_cells,
+            map_blocks=m._map_blocks(wide_net, wide_cells),
+            is_admin=False,
+            can_write=False,
+            can_manage_unmanaged=False,
+        )
+        check(
+            two.count('<div class="ip-map-head">') == 2
+            and two.index('<div class="ip-map-head">10.10.10.0</div>')
+            < two.index('data-ip="10.10.10.255"')
+            < two.index('<div class="ip-map-head">10.10.11.0</div>')
+            < two.index('data-ip="10.10.11.0"')
+            and two.count('<a class="ip-cell') == 510,
+            "subnet.html (1.8.2): a /23 is two blocks, each under the heading of its /24",
         )
         check(
             re.search(r"<a class=\"ip-cell[^>]*\sstyle=", drawn) is None
@@ -1672,15 +1773,15 @@ def main():
             "subnet.html: ?at= reaches the script",
         )
         check(
-            "Dynamic</span>" in drawn and "Conflict</span>" in drawn and "Inside a DHCP pool</span>" in drawn,
-            "subnet.html: the legend names every color on a Kea subnet, the conflict color and the pool outline",
+            "Dynamic</span>" in drawn and "Conflict</span>" in drawn and "Available, in a DHCP pool</span>" in drawn,
+            "subnet.html: the legend names every color on a Kea subnet, the conflict color and the pool tint",
         )
         plain = render_map("u", cells, pool_texts=(), conflict=0)
         check(
             "Dynamic</span>" not in plain
             and "Reserved</span>" not in plain
             and "Conflict</span>" not in plain
-            and "Inside a DHCP pool</span>" not in plain,
+            and "in a DHCP pool</span>" not in plain,
             "subnet.html: an unmanaged subnet's legend has no Dynamic, Reserved or pool key, and no Conflict key without a conflict",
         )
         none = render_map("kea", None)
