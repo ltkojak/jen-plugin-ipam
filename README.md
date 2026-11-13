@@ -10,9 +10,10 @@ Full IP address space management for Jen — covering both Kea-managed subnets a
 
 ## Features
 
-- **Overview page** — all subnets as cards with stacked utilisation bars (dynamic / reserved / static / planned / infrastructure / conflict / available), counted without enumerating the address space
+- **Overview page** — all subnets as cards with stacked utilization bars (dynamic / reserved / static / planned / infrastructure / conflict / available), counted without enumerating the address space
 - **Unmanaged subnets** — track non-DHCP networks Kea doesn't manage (backend networks, management VLANs, etc.). Admins add them by name + CIDR; addresses support manual hostname and MAC since there's no DHCP to supply them
-- **Subnet detail** — every IP with its current status and annotations, as a phone-friendly rowlist; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labelled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on every subnet (`?all=1` shows them all)
+- **Subnet detail** — every IP with its current status and annotations, as a phone-friendly rowlist; the gateway, DNS servers, DHCP pools and the Kea/Jen hosts (from Jen's own subnet context) are shown and labeled as **infrastructure**, addresses inside a DHCP pool carry a `pool` badge, and runs of available addresses collapse into one row on every subnet (`?all=1` shows them all)
+- **Address map** — on a subnet up to a /22, one cell per address above the table, colored by status with the DHCP pools outlined: where the free space is, and whether it is one block or fragments. Click a cell to find that address's row (a collapsed run that holds it is expanded). Hidden on a screen narrower than 480 px
 - **Next free** — the first available address outside every DHCP pool, one click
 - **Devices** — a lease's row shows the device Jen knows for that MAC (name, vendor, icon); Owner prefills from it
 - **Conflict** — a static/planned entry whose address a DHCP client now holds is flagged, not silently shown as a lease. A periodic check alerts once per new conflict (Settings → Alerts, type "IPAM Conflict") and emits an event for the Timeline

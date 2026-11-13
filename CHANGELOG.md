@@ -1,5 +1,29 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.0] - 2026-11-13
+
+The subnet page gains an address map. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged; nothing stored changes and no new query runs.
+
+### Added: the address map
+
+The subnet page's counts and its bar say how full a subnet is. Nothing on the page said where: whether the pool is tight or the static range is, whether the free space is one block or fragments, whether a planned range sits where leases land. Between the counts and the search box there is now a grid, 32 addresses to a row, one cell per host address. A cell carries the color the bar already uses for its status (dynamic, reserved, static, planned, infrastructure, conflict; an available address is the plain surface), a cell inside a DHCP pool has a heavier outline, and the legend under the grid names each one. A /24 is eight rows, a /23 sixteen, a /22 thirty-two.
+
+Click a cell and the table shows that address: the search box and the status filters are cleared so the row is on the page, the row is marked and scrolled to. An address inside a collapsed run of available addresses has no row yet, so its cell is a plain link (`?at=<address>`): the page comes back with that one run expanded and the row marked. This is the one thing the table could not do before without the search box or Next free. `?at=` only finds a row; it never opens the edit dialog, which stays `?ip=`'s.
+
+The map is drawn for a subnet up to a /22 (1,022 cells), the same ceiling as "show every address" and for the same reason; a larger subnet shows the page as it was. It is hidden on a screen narrower than 480 px, where a cell would be too small to touch, and it has no hover readout in this release. The cells are built from the leases, reservations and entries the page had already loaded for its counts.
+
+### Fixed: the address history request renews the idle notice
+
+The edit dialog loaded an address's history with the browser's bare `fetch`. Jen's idle notice (5.70.0) reads the session deadline from every reply that goes through `jenFetch`, so this one request renewed the session on the server while the page went on counting down to the old deadline. It goes through `jenFetch` now, which every Jen this plugin runs on defines.
+
+### Changed: American spelling
+
+`utilised` on the subnet page reads `utilized`; the README's feature list and the comments in `plugin.py` follow. Earlier entries of this file are left as they were written.
+
+### Tested
+
+`tools/test_plugin.py`: the cell list for a /24 with one address of every status (status, class and order per cell; identical statuses to the table's own space; the same cells from the "show every address" path), the ceiling (a /22 drawn, a /21 not, a /30 two cells), the route (`?at=` expands the run that holds the address and leaves `open_ip` alone; an address outside the subnet, the network address, the broadcast address and junk are dropped), and the page rendered through the real Jinja: 254 cells, each a named link with no inline style and no `title`, the map between the counts and the search box, the legend on a Kea and on an unmanaged subnet, no map above the ceiling, the stylesheet order that lets a status color beat the cell's own background, and no bare `fetch` in the template.
+
 ## [1.7.3] - 2026-10-12
 
 A viewer is no longer shown controls the plugin will refuse. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged, and no route, query or stored value changes.

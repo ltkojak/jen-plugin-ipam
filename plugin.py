@@ -9,7 +9,7 @@ count is made: the gateway, DNS servers, pools, the Kea servers' and
 Jen host's own addresses (Jen's `subnet_context`, v5.30.0), the
 `devices` table (a device's name/owner/vendor beside its lease), and
 the plugin's own entries — so an address inside a DHCP pool is marked
-as such, infrastructure addresses are labelled instead of "available",
+as such, infrastructure addresses are labeled instead of "available",
 a static entry whose IP now carries a dynamic lease is a *conflict*,
 and "next free outside the pools" is one click. Overview counts no
 longer enumerate every host address of every subnet, and the detail
@@ -64,7 +64,7 @@ _MAX_PREFIX = 16
 # `?all=1` and the per-run expand still show everything.
 _COLLAPSE_PREFIX = 32
 # A run of at least this many consecutive available addresses becomes one
-# row on the detail page; a shorter run is cheaper to show than to summarise,
+# row on the detail page; a shorter run is cheaper to show than to summarize,
 # so the floor is what keeps a nearly-full /29 readable.
 _MIN_RUN = 4
 # ?all=1 (every address, uncollapsed) is refused above this size (v1.6.4): a /16 is 65,534 rows.
@@ -201,7 +201,7 @@ def _format_identifier(hex_str, ident_type):
         return ""
     if ident_type == 0 and len(hex_str) == 12:
         return ":".join(hex_str[i : i + 2] for i in range(0, 12, 2)).lower()
-    # Non-MAC identifier (client-id, DUID, circuit-id) — show raw hex, labelled.
+    # Non-MAC identifier (client-id, DUID, circuit-id) — show raw hex, labeled.
     return f"id:{hex_str.lower()}"
 
 
@@ -456,7 +456,7 @@ def _compose_entry(ip, active_leases, reservations, ipam_entries, ctx, devices):
     is a *conflict*, not silently 'dynamic') > infrastructure > static/planned > available.
 
     v1.6.4 — factored out of `_compose_space` so the CSV export and the collapsed detail view can
-    build a single address's row without materialising the whole subnet first."""
+    build a single address's row without materializing the whole subnet first."""
     infra = ctx.get("infrastructure", {})
     entry = {
         "ip": ip,
@@ -535,6 +535,42 @@ def _build_address_space(kind, subnet_id, cidr, ctx=None, subnet=None):
         macs = {v["mac"] for v in active_leases.values()} | {v["mac"] for v in reservations.values()}
         devices = _devices_by_mac(sorted(m for m in macs if m))
     return _compose_space(all_ips, active_leases, reservations, ipam_entries, ctx, devices)
+
+
+# v1.8.0 - the address map: one cell per host address above the table. A cell's color is the class the
+# utilization bar already uses for that status (`_bar_widths.html`), so the page has ONE legend.
+_MAP_CLASS = {
+    "dynamic": "ip-seg-dyn",
+    "reserved": "ip-seg-res",
+    "static": "ip-seg-sta",
+    "planned": "ip-seg-pla",
+    "infrastructure": "ip-seg-inf",
+    "conflict": "ip-seg-con",
+}
+
+
+def _map_cells(space):
+    """Pure: an already-built space as map cells, in address order - `{"ip", "status", "cls"}`. `cls` is
+    the whole class attribute: `ip-cell`, the status's bar class (none for an available address) and
+    `ip-cell-pool` for an address inside a DHCP pool."""
+    cells = []
+    for e in space:
+        classes = ["ip-cell"]
+        if e["status"] in _MAP_CLASS:
+            classes.append(_MAP_CLASS[e["status"]])
+        if e["in_pool"]:
+            classes.append("ip-cell-pool")
+        cells.append({"ip": e["ip"], "status": e["status"], "cls": " ".join(classes)})
+    return cells
+
+
+def _address_map(network, active_leases, reservations, ipam_entries, ctx):
+    """Pure: the map's cells for a subnet up to a /22 (1,022 cells), None for a larger one - the same
+    ceiling as `?all=1`, for the same reason: a cell per address of a /16 is 65,534 elements."""
+    if network.prefixlen < _MAX_ALL_PREFIX:
+        return None
+    all_ips = [str(h) for h in network.hosts()]
+    return _map_cells(_compose_space(all_ips, active_leases, reservations, ipam_entries, ctx))
 
 
 def _count_sets(total_hosts, host_ips_in, active_leases, reservations, ipam_entries, ctx):
@@ -681,7 +717,7 @@ def _run_boundaries(network, ctx, occupied):
 
 def _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=None, min_run=_MIN_RUN):
     """Pure: the SAME rows `_collapse_runs(_compose_space(...), collapse=True, expand, min_run)` would
-    give for this subnet, without ever materialising the full address list. Every occupied address
+    give for this subnet, without ever materializing the full address list. Every occupied address
     (`_occupied_addresses`) becomes its own entry row via `_compose_entry`; the address ranges between
     them collapse into run rows (or, when shorter than `min_run`, individual 'available' rows) exactly
     as the old builder did — `_run_boundaries` guarantees no boundary interval mixes occupied and
@@ -718,7 +754,7 @@ def _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, de
 
 def _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx):
     """The first available address outside every pool, walking `network.hosts()` lazily and stopping
-    at the first miss — what `_next_free(_build_address_space(...))` did after materialising every
+    at the first miss — what `_next_free(_build_address_space(...))` did after materializing every
     address of the subnet first; a /16 cost ~60 MB and roughly a second per request for this alone."""
     infra = ctx.get("infrastructure", {})
     for host in network.hosts():
@@ -760,7 +796,7 @@ def _all_kea_subnets():
 
 def _oversized_kea_subnet(kind, network):
     """v1.6.4 — a Kea subnet bigger than `_MAX_PREFIX` (the same cap `add_subnet` already enforces
-    for unmanaged ones) still hit `_build_address_space`'s full materialisation on every detail view,
+    for unmanaged ones) still hit `_build_address_space`'s full materialization on every detail view,
     export and next-free call; those routes now refuse it the same way an oversized unmanaged one
     already was refused at creation."""
     return kind == "kea" and network.prefixlen < _MAX_PREFIX
@@ -1089,10 +1125,16 @@ def subnet_detail(kind, subnet_id):
     open_ip = _extract_ip(request.args.get("ip", ""))
     if open_ip and ipaddress.IPv4Address(open_ip) not in network:
         open_ip = None
+    # v1.8.0 - an address to FIND (a click on the address map): its row is highlighted and scrolled to,
+    # and a collapsed run that holds it is expanded the way `?ip=` expands one. No modal opens.
+    at_ip = _extract_ip(request.args.get("at", ""))
+    if at_ip and not _host_in_network(network, at_ip):
+        at_ip = None
+    focus_ip = open_ip or at_ip
 
     all_arg = request.args.get("all")
     if all_arg == "1" and network.prefixlen < _MAX_ALL_PREFIX:
-        # v1.6.4 — showing every address materialises the whole subnet; offered up to a /22 (1,022
+        # v1.6.4 — showing every address materializes the whole subnet; offered up to a /22 (1,022
         # hosts), refused above it rather than rendering (or building) tens of thousands of rows.
         flash(f"Showing every address is only offered up to a /{_MAX_ALL_PREFIX}; {subnet['cidr']} is larger.", "error")
         all_arg = None
@@ -1107,24 +1149,26 @@ def subnet_detail(kind, subnet_id):
         )
         expand = _parse_expand(request.args.get("expand", ""), network)
         rows = _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=expand)
-        if open_ip and not any(not r.get("run") and r["ip"] == open_ip for r in rows):
+        if focus_ip and not any(not r.get("run") and r["ip"] == focus_ip for r in rows):
             for r in rows:
                 if r.get("run") and int(ipaddress.IPv4Address(r["first"])) <= int(
-                    ipaddress.IPv4Address(open_ip)
+                    ipaddress.IPv4Address(focus_ip)
                 ) <= int(ipaddress.IPv4Address(r["last"])):
                     rows = _build_rows_lazy(
                         network, active_leases, reservations, ipam_entries, ctx, devices, expand=r["key"]
                     )
                     break
         next_free = _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)
+        address_map = _address_map(network, active_leases, reservations, ipam_entries, ctx)
     else:
-        # ?all=1, allowed only up to a /22 (1,022 hosts): the old full-materialisation path, kept as
+        # ?all=1, allowed only up to a /22 (1,022 hosts): the old full-materialization path, kept as
         # `_build_address_space` since the size is capped and simplicity wins over reusing the sets
         # already loaded above.
         space = _build_address_space(kind, subnet_id, subnet["cidr"], ctx=ctx, subnet=subnet)
         counts = _count_space(space)
         rows = list(space)
         next_free = _next_free(space)
+        address_map = _map_cells(space)
 
     return render_template(
         "ipam/subnet.html",
@@ -1140,6 +1184,8 @@ def subnet_detail(kind, subnet_id):
         recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
         open_ip=open_ip,
+        at_ip=at_ip,
+        address_map=address_map,
         is_admin=is_admin_or_above(),
         can_write=is_admin_or_above(),
         can_manage_unmanaged=_can_manage_unmanaged(),
@@ -1181,7 +1227,7 @@ def export_csv(kind, subnet_id):
     prefixlen = network.prefixlen
 
     def _entries():
-        # v1.6.4 — one address composed at a time, never the whole subnet materialised at once.
+        # v1.6.4 — one address composed at a time, never the whole subnet materialized at once.
         for host in network.hosts():
             yield _compose_entry(str(host), active_leases, reservations, ipam_entries, ctx, devices)
 
@@ -2265,7 +2311,7 @@ def _api_next_free(subnet_id):
     ctx = _subnet_ctx("kea", subnet_id, subnet)
     active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"])
     ipam_entries = _load_entries("kea", subnet_id)
-    # v1.6.4 — walks the network lazily instead of materialising the whole address space for one IP.
+    # v1.6.4 — walks the network lazily instead of materializing the whole address space for one IP.
     return jsonify({"ip": _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)})
 
 

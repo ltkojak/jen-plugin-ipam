@@ -15,6 +15,7 @@ import importlib.util
 import ipaddress
 import os
 import pathlib
+import re
 import sys
 import types
 
@@ -1431,6 +1432,8 @@ def main():
                 recent_history=[],
                 status_filter="all",
                 open_ip="",
+                at_ip="",
+                address_map=None,
                 is_admin=can_write,
                 can_write=can_write,
                 can_manage_unmanaged=can_manage,
@@ -1511,6 +1514,181 @@ def main():
         check(
             "import_commit" in (tpl_dir / "import_preview.html").read_text(encoding="utf-8"),
             "import_preview.html: only ever rendered by import_preview, a route that refuses a viewer first (no gate needed)",
+        )
+
+    # ── 1.8.0: the address map ───────────────────────────────────────────────
+    m = load_plugin()  # a fresh copy: the checks above replaced functions on `p`
+    map_net = ipaddress.IPv4Network("10.7.0.0/24")
+    map_ctx = {
+        "gateways": ["10.7.0.1"],
+        "dns": [],
+        "pools": [(int(ipaddress.IPv4Address("10.7.0.100")), int(ipaddress.IPv4Address("10.7.0.199")), "p")],
+        "infrastructure": {"10.7.0.1": "gateway"},
+        "notes": "",
+    }
+    map_leases = {"10.7.0.100": {"hostname": "a", "mac": ""}, "10.7.0.20": {"hostname": "b", "mac": ""}}
+    map_res = {"10.7.0.10": {"hostname": "r", "mac": "", "host_id": 3}}
+    map_entries = {
+        "10.7.0.20": {"entry_status": "static", "is_static": 1, "label": "nas"},
+        "10.7.0.30": {"entry_status": "static", "is_static": 1, "label": "printer"},
+        "10.7.0.31": {"entry_status": "planned", "is_static": 0, "label": "later"},
+    }
+    cells = m._address_map(map_net, map_leases, map_res, map_entries, map_ctx)
+    by_ip = {c["ip"]: c for c in cells}
+    check(
+        len(cells) == 254 and cells[0]["ip"] == "10.7.0.1" and cells[-1]["ip"] == "10.7.0.254",
+        "map: a /24 is 254 cells, in address order",
+    )
+    want = {
+        "10.7.0.1": ("infrastructure", "ip-cell ip-seg-inf"),
+        "10.7.0.10": ("reserved", "ip-cell ip-seg-res"),
+        "10.7.0.20": ("conflict", "ip-cell ip-seg-con"),
+        "10.7.0.30": ("static", "ip-cell ip-seg-sta"),
+        "10.7.0.31": ("planned", "ip-cell ip-seg-pla"),
+        "10.7.0.100": ("dynamic", "ip-cell ip-seg-dyn ip-cell-pool"),
+        "10.7.0.150": ("available", "ip-cell ip-cell-pool"),
+        "10.7.0.200": ("available", "ip-cell"),
+    }
+    for ip, (status, cls) in want.items():
+        check(
+            (by_ip[ip]["status"], by_ip[ip]["cls"]) == (status, cls),
+            f"map: {ip} is {status} with class {cls!r} (got {by_ip[ip]['status']}, {by_ip[ip]['cls']!r})",
+        )
+    map_space = m._compose_space([str(h) for h in map_net.hosts()], map_leases, map_res, map_entries, map_ctx)
+    check(
+        [c["status"] for c in cells] == [e["status"] for e in map_space],
+        "map: every cell's status is the status the table gives that address",
+    )
+    check(m._map_cells(map_space) == cells, "map: ?all=1's already-built space gives the same cells")
+    check(
+        set(m._MAP_CLASS) == set(m._ALL_STATUSES) - {"available"}, "map: every status but available has a color class"
+    )
+    check(
+        len(m._address_map(ipaddress.IPv4Network("10.8.0.0/22"), {}, {}, {}, map_ctx)) == 1022,
+        "map: a /22 is drawn (1,022 cells)",
+    )
+    check(
+        m._address_map(ipaddress.IPv4Network("10.8.0.0/21"), {}, {}, {}, map_ctx) is None,
+        "map: a /21 is not drawn - the same ceiling as ?all=1",
+    )
+    check(
+        len(m._address_map(ipaddress.IPv4Network("10.8.0.4/30"), {}, {}, {}, map_ctx)) == 2, "map: a /30 is two cells"
+    )
+
+    # the route: ?at= expands the run that holds the address and opens no modal; a foreign address is dropped
+    m._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.7.0.0/24"}
+    m._subnet_ctx = lambda kind, sid, subnet: map_ctx
+    m._load_kea_sets = lambda sid, cidr=None: (map_leases, map_res)
+    m._load_entries = lambda kind, sid: map_entries
+    m._devices_by_mac = lambda macs: {}
+    m._history_rows = lambda *a, **k: []
+    m.render_template = lambda name, **kw: kw
+    m.request = types.SimpleNamespace(args={}, form={})
+    page = m.subnet_detail("kea", 9)
+    check(
+        page["address_map"] == cells and page["at_ip"] is None,
+        "subnet_detail: the collapsed page is handed the map, and no address to find",
+    )
+    check(
+        not any(not r.get("run") and r["ip"] == "10.7.0.150" for r in page["rows"]),
+        "subnet_detail: 10.7.0.150 sits inside a collapsed run by default",
+    )
+    m.request = types.SimpleNamespace(args={"at": "10.7.0.150"}, form={})
+    page = m.subnet_detail("kea", 9)
+    check(
+        page["at_ip"] == "10.7.0.150"
+        and page["open_ip"] is None
+        and any(not r.get("run") and r["ip"] == "10.7.0.150" for r in page["rows"]),
+        "subnet_detail: ?at= expands the run that holds the address, and it is not the edit modal's ?ip=",
+    )
+    for foreign in ("10.99.0.5", "10.7.0.0", "10.7.0.255", "x", ""):
+        m.request = types.SimpleNamespace(args={"at": foreign}, form={})
+        check(
+            m.subnet_detail("kea", 9)["at_ip"] is None,
+            f"subnet_detail: ?at={foreign!r} is not a host of this subnet and is dropped",
+        )
+    m.request = types.SimpleNamespace(args={"all": "1"}, form={})
+    check(m.subnet_detail("kea", 9)["address_map"] == cells, "subnet_detail: ?all=1 is handed the same map")
+    m._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.7.0.0/21"}
+    m.request = types.SimpleNamespace(args={}, form={})
+    check(m.subnet_detail("kea", 9)["address_map"] is None, "subnet_detail: a /21 is handed no map")
+
+    map_html = pathlib.Path(ROOT, "templates", "ipam", "subnet.html").read_text(encoding="utf-8")
+    check(
+        map_html.index(".ip-cell{") < map_html.index("{% include 'ipam/_bar_widths.html' %}"),
+        "subnet.html: the map's rules come before the bar classes, so a status color beats the cell's own background",
+    )
+    check(
+        "@media (max-width:479px){.ip-map-block{display:none}}" in map_html,
+        "subnet.html: the map is hidden below 480 px",
+    )
+    check(
+        "jenFetch(HISTORY_URL" in map_html and re.search(r"(?<![A-Za-z.])fetch\(", map_html) is None,
+        "subnet.html: the history request goes through Jen's jenFetch, never a bare fetch",
+    )
+    check("utilised" not in map_html and "% utilized" in map_html, "subnet.html: American spelling")
+    if jinja2 is not None:
+
+        def render_map(kind, address_map, at_ip="", pool_texts=("10.7.0.100 - 10.7.0.199",), conflict=1):
+            return env.get_template("ipam/subnet.html").render(
+                kind=kind,
+                subnet_id=9,
+                subnet={"name": "lan", "cidr": "10.7.0.0/24", "description": ""},
+                rows=entries,
+                collapsed=True,
+                counts={**counts, "conflict": conflict},
+                ctx={"gateways": [], "dns": [], "notes": ""},
+                pool_texts=list(pool_texts),
+                next_free="",
+                recent_history=[],
+                status_filter="all",
+                open_ip="",
+                at_ip=at_ip,
+                address_map=address_map,
+                is_admin=False,
+                can_write=False,
+                can_manage_unmanaged=False,
+            )
+
+        drawn = render_map("kea", cells, at_ip="10.7.0.150")
+        check(drawn.count('<a class="ip-cell') == 254, "subnet.html: one cell per address")
+        check(
+            '<a class="ip-cell ip-seg-dyn ip-cell-pool" href="?at=10.7.0.100" data-ip="10.7.0.100" aria-label="10.7.0.100 dynamic"></a>'
+            in drawn,
+            "subnet.html: a cell is a link to ?at=<its address>, named for a screen reader, colored and outlined by class",
+        )
+        check(
+            re.search(r"<a class=\"ip-cell[^>]*\sstyle=", drawn) is None
+            and " title=" not in drawn.split('id="ipam-map"')[1].split("</div>")[0],
+            "subnet.html: a cell carries no inline style and no hover readout",
+        )
+        check(
+            drawn.index('id="ipam-map"') < drawn.index('id="ipam-search"')
+            and drawn.index("Available</div>") < drawn.index('id="ipam-map"'),
+            "subnet.html: the map sits between the counts and the search box",
+        )
+        check(
+            'var AT_IP = "10.7.0.150";' in drawn and "if (AT_IP) showAddress(AT_IP);" in drawn,
+            "subnet.html: ?at= reaches the script",
+        )
+        check(
+            "Dynamic</span>" in drawn and "Conflict</span>" in drawn and "Inside a DHCP pool</span>" in drawn,
+            "subnet.html: the legend names every color on a Kea subnet, the conflict color and the pool outline",
+        )
+        plain = render_map("u", cells, pool_texts=(), conflict=0)
+        check(
+            "Dynamic</span>" not in plain
+            and "Reserved</span>" not in plain
+            and "Conflict</span>" not in plain
+            and "Inside a DHCP pool</span>" not in plain,
+            "subnet.html: an unmanaged subnet's legend has no Dynamic, Reserved or pool key, and no Conflict key without a conflict",
+        )
+        none = render_map("kea", None)
+        check(
+            'id="ipam-map"' not in none
+            and 'class="ip-map-legend"' not in none
+            and "getElementById('ipam-map')" in none,
+            "subnet.html: no map above a /22, and the script copes with its absence",
         )
 
     if failures:

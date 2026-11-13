@@ -101,6 +101,18 @@
 .ip-fdf20b{padding:12px 16px}
 .ip-ffcb32{font-size:12px;color:var(--danger)}
 
+/* v1.8.0 - the address map. A cell's color is its status's bar class, so these rules sit BEFORE the
+   include below: at equal specificity the later rule wins, and the bar class must beat `.ip-cell`. */
+.ip-map-block{margin-bottom:14px}
+.ip-map{display:grid;grid-template-columns:repeat(32,1fr);gap:2px}
+.ip-cell{display:block;aspect-ratio:1;box-sizing:border-box;border:1px solid var(--border);border-radius:2px;background-color:var(--surface2)}
+.ip-cell-pool{border:2px solid var(--text)}
+.ip-cell:hover,.ip-cell:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.ip-map-legend{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--text-muted);margin-top:8px}
+.ip-key{display:inline-block;width:10px;height:10px;box-sizing:border-box;border:1px solid var(--border);border-radius:2px;background-color:var(--surface2);vertical-align:middle;margin-right:4px}
+.ip-key.ip-cell-pool{border:2px solid var(--text)}
+#ipam-table tbody tr.ip-at td{background:var(--surface2);box-shadow:inset 0 2px 0 var(--primary),inset 0 -2px 0 var(--primary)}
+@media (max-width:479px){.ip-map-block{display:none}}
 {% include 'ipam/_bar_widths.html' %}
 .ip-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
 .ip-hidden{display:none}
@@ -157,10 +169,32 @@
                 <div class="ip-seg ip-seg-con ip-w{{ (counts.conflict / counts.total * 100)|round|int }}"></div>
             </div>
             <div class="ip-627512">
-                {{ counts.pct }}% utilised
+                {{ counts.pct }}% utilized
             </div>
         </div>
     </div>
+
+    {% if address_map %}
+    <!-- Address map (v1.8.0): one cell per host address, up to a /22 -->
+    <div class="ip-map-block">
+        <div id="ipam-map" class="ip-map" role="group" aria-label="Address map">
+            {% for c in address_map %}<a class="{{ c.cls }}" href="?at={{ c.ip }}" data-ip="{{ c.ip }}" aria-label="{{ c.ip }} {{ c.status }}"></a>{% endfor %}
+        </div>
+        <div class="ip-map-legend">
+            <span><i class="ip-key"></i>Available</span>
+            {% if not unmanaged %}
+            <span><i class="ip-key ip-seg-dyn"></i>Dynamic</span>
+            <span><i class="ip-key ip-seg-res"></i>Reserved</span>
+            {% endif %}
+            <span><i class="ip-key ip-seg-sta"></i>Static</span>
+            <span><i class="ip-key ip-seg-pla"></i>Planned</span>
+            <span><i class="ip-key ip-seg-inf"></i>Infrastructure</span>
+            {% if counts.conflict %}<span><i class="ip-key ip-seg-con"></i>Conflict</span>{% endif %}
+            {% if pool_texts %}<span><i class="ip-key ip-cell-pool"></i>Inside a DHCP pool</span>{% endif %}
+            <span>Click an address to find its row.</span>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Search box -->
     <div class="ip-f0a31b">
@@ -481,6 +515,7 @@
 var UNMANAGED = {{ 'true' if unmanaged else 'false' }};
 var HISTORY_URL = {{ url_for('ipam.history', kind=kind, subnet_id=subnet_id)|tojson }};
 var OPEN_IP = {{ (open_ip or '')|tojson }};
+var AT_IP = {{ (at_ip or '')|tojson }};
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 // v1.3.3: multi-select status filtering. _currentFilter is a Set —
@@ -567,6 +602,29 @@ document.getElementById('filter-tabs').addEventListener('click', function(e) {
     }
 });
 
+// ── Address map (v1.8.0) ──────────────────────────────────────────────────────
+// A click on a cell finds that address's row: the search and the status filters are cleared so the
+// row is on the page, the row is marked and scrolled to. A cell whose row is not on the page (it is
+// inside a collapsed run) is a plain link: the server expands the run and this runs again on load.
+function showAddress(ip) {
+    var row = document.querySelector('#ipam-table tbody tr[data-ip="' + ip + '"]');
+    if (!row) return false;
+    document.getElementById('ipam-search').value = '';
+    setFilterAll();
+    document.querySelectorAll('#ipam-table tbody tr.ip-at').forEach(function(r) { r.classList.remove('ip-at'); });
+    row.classList.add('ip-at');
+    row.scrollIntoView({block: 'center'});
+    return true;
+}
+
+var _map = document.getElementById('ipam-map');
+if (_map) {
+    _map.addEventListener('click', function(e) {
+        var cell = e.target.closest('a[data-ip]');
+        if (cell && showAddress(cell.getAttribute('data-ip'))) e.preventDefault();
+    });
+}
+
 {% if can_write %}
 // ── Edit modal ────────────────────────────────────────────────────────────────
 function _escape(s) {
@@ -578,7 +636,7 @@ function _escape(s) {
 function loadHistory(ip) {
     var box = document.getElementById('edit-history');
     box.textContent = 'Loading history…';
-    fetch(HISTORY_URL + '?ip=' + encodeURIComponent(ip), {cache: 'no-store'})
+    jenFetch(HISTORY_URL + '?ip=' + encodeURIComponent(ip), {cache: 'no-store'})
         .then(function(r) { return r.ok ? r.json() : {rows: []}; })
         .catch(function() { return {rows: []}; })
         .then(function(d) {
@@ -752,6 +810,7 @@ if (OPEN_IP) {
     if (_btn) { _row.scrollIntoView({block: 'center'}); openEditModal(_btn); }
 }
 {% endif %}
+if (AT_IP) showAddress(AT_IP);
 </script>
 
 {% endblock %}
