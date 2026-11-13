@@ -1619,7 +1619,7 @@ def main():
         "subnet.html: the map's rules come before the bar classes, so a status color beats the cell's own background",
     )
     check(
-        "@media (max-width:479px){.ip-map-block{display:none}}" in map_html,
+        "@media screen and (max-width:479px){.ip-map-block{display:none}}" in map_html,
         "subnet.html: the map is hidden below 480 px",
     )
     check(
@@ -1690,6 +1690,25 @@ def main():
             and "getElementById('ipam-map')" in none,
             "subnet.html: no map above a /22, and the script copes with its absence",
         )
+
+    # ── 1.8.1: a width query names the screen (Jen's tests/test_print.py, held here too) ──
+    width_offenders, width_scanned = [], 0
+    for path in sorted(pathlib.Path(ROOT).rglob("*")):
+        rel = path.relative_to(ROOT).as_posix()
+        if (
+            not path.is_file()
+            or rel.startswith((".git/", "tools/"))
+            or path.suffix not in (".html", ".css", ".js", ".py")
+        ):
+            continue
+        width_scanned += 1
+        for found in re.finditer(r"@media([^{]*)\{", path.read_text(encoding="utf-8")):
+            if re.search(r"(?:max|min)-width", found.group(1)) and not re.search(r"\bscreen\b", found.group(1)):
+                width_offenders.append(f"{rel}: {found.group(0).strip()}")
+    check(
+        width_scanned >= 5 and not width_offenders,
+        f"every @media with a width names the screen, so print is not taken for a phone ({width_scanned} files; {width_offenders})",
+    )
 
     if failures:
         print(f"\n{len(failures)} check(s) failed")

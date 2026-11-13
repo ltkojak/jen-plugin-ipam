@@ -1,5 +1,11 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.1] - 2026-11-13
+
+### Fixed: a printout keeps the address map
+
+1.8.0 hid the address map with `@media (max-width:479px)`. A width query that does not name the screen is also asked of a printed page, so a narrow print layout would have dropped the map. The rule is now `@media screen and (max-width:479px)`: it hides the map on a phone-width screen and nowhere else. Jen's own tree holds every width query to this (`tests/test_print.py`), and that test is what found it when 1.8.0 was bundled. The plugin's harness now holds the plugin to the same rule, over every template, script and stylesheet it ships and over `plugin.py`, so the next one is found here. Nothing else changes: `requires_jen` (5.68.0), `plugin_api` (3) and every migration are as they were.
+
 ## [1.8.0] - 2026-11-13
 
 The subnet page gains an address map. `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged; nothing stored changes and no new query runs.
