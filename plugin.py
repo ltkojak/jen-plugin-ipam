@@ -17,6 +17,7 @@ page collapses long runs of available addresses into one row.
 """
 
 import csv
+import html
 import io
 import ipaddress
 import json
@@ -340,10 +341,31 @@ class _LookupFailed(Exception):
     database away, `_load_kea_sets` returned two empty dicts, so the conflict job read "no conflicts" and forgot every one
     it had announced, next-free handed out an address a lease held, and a save skipped the check that a lease or a
     reservation already owns the address. A caller that DECIDES something from the answer passes `strict=True` and gets
-    this; a page that only shows the answer still gets the empty one."""
+    this; a page that only shows the answer still gets the empty one.
+
+    v1.8.4 (BG6) - it says WHICH read failed: `source` is "kea" (Kea's leases and reservations) or "entries" (IPAM's own
+    table). There was one refusal sentence and it named Kea even when IPAM's own table was the read that did not answer.
+    `str(e)` stays the plain name of what could not be read, for the log."""
+
+    def __init__(self, what, source):
+        super().__init__(what)
+        self.source = source
 
 
 LOOKUP_REFUSAL = "Could not check Kea's leases and reservations - nothing was changed. Try again in a moment."
+ENTRIES_REFUSAL = "Could not read IPAM's own entries - nothing was changed. Try again in a moment."
+_API_ENTRIES_UNREAD = "IPAM's entries could not be read"
+
+
+def _refusal(failed):
+    """v1.8.4 (BG6) - the flash sentence for the read that failed."""
+    return ENTRIES_REFUSAL if failed.source == "entries" else LOOKUP_REFUSAL
+
+
+def _api_refusal(failed, kea_sentence):
+    """v1.8.4 (BG6) - the API's 503 for the read that failed: the route's own sentence about Kea, or the one sentence the
+    list API already used for IPAM's own table."""
+    return jsonify({"error": _API_ENTRIES_UNREAD if failed.source == "entries" else kea_sentence}), 503
 
 
 def _load_kea_sets(subnet_id, cidr=None, strict=False):
@@ -413,7 +435,7 @@ def _load_kea_sets(subnet_id, cidr=None, strict=False):
     except Exception as e:
         logger.error(f"IPAM: Kea DB error for subnet {subnet_id}: {e}")
         if strict:
-            raise _LookupFailed("Kea's leases and reservations") from e
+            raise _LookupFailed("Kea's leases and reservations", "kea") from e
     finally:
         if db:
             db.close()
@@ -439,7 +461,7 @@ def _load_entries(db_kind, subnet_id, strict=False):
     except Exception as e:
         logger.error(f"IPAM: entries error for {db_kind}/{subnet_id}: {e}")
         if strict:
-            raise _LookupFailed("IPAM's own entries") from e
+            raise _LookupFailed("IPAM's own entries", "entries") from e
     finally:
         if db:
             db.close()
@@ -1210,7 +1232,14 @@ def subnet_detail(kind, subnet_id):
             active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
         except _LookupFailed:
             kea_unavailable = True
-    ipam_entries = _load_entries(db_kind, subnet_id)
+    # v1.8.4 (BG7) - the same for IPAM's own table: the page read it without `strict`, so with the table unreadable it opened
+    # with no notice and a Next free button that could name an address that is static or planned.
+    entries_unavailable = False
+    try:
+        ipam_entries = _load_entries(db_kind, subnet_id, strict=True)
+    except _LookupFailed:
+        entries_unavailable = True
+        ipam_entries = {}
     devices = {}
     if kind == "kea":
         macs = {v["mac"] for v in active_leases.values()} | {v["mac"] for v in reservations.values()}
@@ -1276,8 +1305,9 @@ def subnet_detail(kind, subnet_id):
         counts=counts,
         ctx=ctx,
         pool_texts=[t for _f, _l, t in ctx.get("pools", [])],
-        next_free=None if kea_unavailable else next_free,
+        next_free=None if (kea_unavailable or entries_unavailable) else next_free,
         kea_unavailable=kea_unavailable,
+        entries_unavailable=entries_unavailable,
         recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
         open_ip=open_ip,
@@ -1577,8 +1607,8 @@ def import_commit(kind, subnet_id):
     try:
         leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True) if kind == "kea" else ({}, {})
         existing_entries = _load_entries(db_kind, subnet_id, strict=True)
-    except _LookupFailed:
-        flash(LOOKUP_REFUSAL, "error")
+    except _LookupFailed as failed:
+        flash(_refusal(failed), "error")
         return redirect(detail_url)
 
     saved = 0
@@ -1695,8 +1725,8 @@ def save_entry(kind, subnet_id):
         try:
             leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
             existing = _load_entries(db_kind, subnet_id, strict=True).get(ip)
-        except _LookupFailed:
-            flash(LOOKUP_REFUSAL, "error")
+        except _LookupFailed as failed:
+            flash(_refusal(failed), "error")
             return redirect(detail_url)
         blocked = _designation_blocker(ip, ipam_status, leases_now, res_now, existing)
         if blocked:
@@ -1844,8 +1874,8 @@ def range_action(kind, subnet_id):
     if kind == "kea" and action != "clear":
         try:
             leases, res = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
-        except _LookupFailed:
-            flash(LOOKUP_REFUSAL, "error")
+        except _LookupFailed as failed:
+            flash(_refusal(failed), "error")
             return redirect(detail_url)
         skipped = (set(leases) | set(res)) & set(ips)
         ips = [ip for ip in ips if ip not in skipped]
@@ -2060,6 +2090,11 @@ def _kea_conflicts():
             network = ipaddress.IPv4Network(info["cidr"], strict=False)
             leases, res = _load_kea_sets(sid, info["cidr"], strict=True)
             entries = _load_entries("kea", sid, strict=True)
+        except _LookupFailed as failed:
+            # v1.8.4 (BG6) - the line names the read that failed
+            logger.error(f"IPAM: conflict scan could not read {failed} for subnet {sid}")
+            unread.add(sid)
+            continue
         except Exception as e:
             logger.error(f"IPAM: conflict scan failed for subnet {sid}: {e}")
             unread.add(sid)
@@ -2125,8 +2160,23 @@ def _check_conflicts():
         _announce_conflict(sid, info, entry)
 
 
+def _alert_text(value):
+    """v1.8.4 (BG1) - one operator- or device-supplied value, escaped for an alert. The default template starts with `<b>`,
+    and Telegram and Pushover refuse a whole message that does not parse as HTML, so a conflict on a lease whose hostname
+    was `AT&T <hotspot>` was never announced on those channels. `jen.plugin_api.safe_text` does this from Jen 7.2.0; an
+    older Jen has no such name and gets the same escape from the standard library."""
+    try:
+        from jen.plugin_api import safe_text
+    except ImportError:
+        return html.escape(str(value), quote=False)
+    return safe_text(value)
+
+
 def _announce_conflict(sid, info, entry):
-    """One new conflict: the alert and the Timeline event, each on its own so one failing does not stop the next."""
+    """One new conflict: the alert and the Timeline event, each on its own so one failing does not stop the next.
+
+    v1.8.4 (BG1) - the subnet's name, the designation and the hostname go into the alert through `_alert_text`. The address
+    and the MAC are not text anyone chose, and the Timeline event is not HTML, so those stay as they are."""
     try:
         from jen.plugin_api import send_alert
 
@@ -2134,9 +2184,9 @@ def _announce_conflict(sid, info, entry):
             _CONFLICT_ALERT_TYPE,
             subnet_id=sid,
             ip=entry["ip"],
-            subnet=info["name"],
-            designated=entry["designated"] or "static",
-            hostname=entry["hostname"],
+            subnet=_alert_text(info["name"]),
+            designated=_alert_text(entry["designated"] or "static"),
+            hostname=_alert_text(entry["hostname"]),
             mac=entry["mac"],
         )
     except Exception as e:
@@ -2383,7 +2433,7 @@ def _api_list_entries():
     try:
         entries = _load_entries("kea", subnet_id, strict=True)
     except _LookupFailed:
-        return jsonify({"error": "IPAM's entries could not be read"}), 503
+        return jsonify({"error": _API_ENTRIES_UNREAD}), 503
     return jsonify(
         {
             "subnet_id": subnet_id,
@@ -2436,8 +2486,8 @@ def _api_save_entry():
     try:
         leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
         existing = _load_entries("kea", subnet_id, strict=True).get(ip)
-    except _LookupFailed:
-        return jsonify({"error": "Kea's leases and reservations could not be checked; nothing was changed"}), 503
+    except _LookupFailed as failed:
+        return _api_refusal(failed, "Kea's leases and reservations could not be checked; nothing was changed")
     blocked = _designation_blocker(ip, status, leases_now, res_now, existing)
     if blocked:
         return jsonify({"error": blocked}), 409
@@ -2483,9 +2533,9 @@ def _api_next_free(subnet_id):
     try:
         active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
         ipam_entries = _load_entries("kea", subnet_id, strict=True)
-    except _LookupFailed:
+    except _LookupFailed as failed:
         # v1.8.3 (IPAM-5) - never name an address from a lookup that did not answer: it may be one a lease holds
-        return jsonify({"error": "Kea's leases and reservations could not be read; no address is offered"}), 503
+        return _api_refusal(failed, "Kea's leases and reservations could not be read; no address is offered")
     # v1.6.4 — walks the network lazily instead of materializing the whole address space for one IP.
     return jsonify({"ip": _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)})
 

@@ -6,6 +6,9 @@
 {% if kea_unavailable %}
 <div class="alert alert-danger" data-ipam-note="kea-unavailable">Kea's leases and reservations could not be read just now, so this page shows IPAM's own entries only. An address shown as available may be in use, and no next free address is offered. Reload the page to try again.</div>
 {% endif %}
+{% if entries_unavailable %}
+<div class="alert alert-danger" data-ipam-note="entries-unavailable">{% if unmanaged %}IPAM's own entries could not be read, so this page shows no entries and Next free is switched off. Try again in a moment.{% else %}IPAM's own entries could not be read, so this page shows Kea's leases and reservations only and Next free is switched off. Try again in a moment.{% endif %}</div>
+{% endif %}
 
 <div class="page-header ip-1bcfaf">
     <div>

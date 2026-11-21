@@ -1919,7 +1919,7 @@ def main():
     def _sets(sid, cidr=None, strict=False):
         if not kea_up["up"]:
             if strict:
-                raise s._LookupFailed("Kea's leases and reservations")
+                raise s._LookupFailed("Kea's leases and reservations", "kea")
             return {}, {}
         return standing[sid]
 
@@ -2136,6 +2136,240 @@ def main():
     check(
         "{% if kea_unavailable %}" in detail_page and 'data-ipam-note="kea-unavailable"' in detail_page,
         "subnet.html: the page says when Kea's leases and reservations could not be read",
+    )
+
+    # ── 1.8.4 (BG1): what a device or an operator typed is escaped before it goes into the alert ───────────────────────
+    b = load_plugin()
+    _stub_jen_plugin_api()
+    api = sys.modules["jen.plugin_api"]
+    sent, events = [], []
+    api.send_alert = lambda alert_type, **kw: sent.append(kw)
+    api.emit = lambda name, **kw: events.append(kw)
+    odd = {"ip": "10.5.0.20", "designated": "static", "hostname": "AT&T <hotspot>", "mac": "aa:aa:aa:aa:aa:20"}
+    check(not hasattr(api, "safe_text"), "the stub jen.plugin_api starts without safe_text, as a Jen before 7.2.0 is")
+    b._announce_conflict(5, {"name": "Lab & <one>", "cidr": "10.5.0.0/24"}, odd)
+    text = b._CONFLICT_TEMPLATE.format(**{k: v for k, v in sent[-1].items() if k != "subnet_id"}) if sent else ""
+    check(
+        "Hostname: AT&amp;T &lt;hotspot&gt;" in text and "in Lab &amp; &lt;one&gt;," in text,
+        f"_announce_conflict: on a Jen without safe_text the hostname and the subnet name are escaped (got {text!r})",
+    )
+    check(
+        text.count("<") == 2
+        and text.count(">") == 2
+        and "&" not in text.replace("&amp;", "").replace("&lt;", "").replace("&gt;", ""),
+        f"the rendered alert holds no markup but the template's own <b> pair (got {text!r})",
+    )
+    check(
+        sent[-1]["ip"] == "10.5.0.20" and sent[-1]["mac"] == "aa:aa:aa:aa:aa:20" and sent[-1]["subnet_id"] == 5,
+        "the address, the MAC and the subnet id are passed as they are",
+    )
+    check(
+        len(events) == 1 and "Lab & <one>" in events[0]["detail"],
+        f"the Timeline event is not HTML and keeps the name as typed (got {events})",
+    )
+    through = []
+
+    def _stub_safe_text(value):
+        through.append(value)
+        return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    api.safe_text = _stub_safe_text
+    b._announce_conflict(5, {"name": "Lab & <one>", "cidr": "10.5.0.0/24"}, odd)
+    text = b._CONFLICT_TEMPLATE.format(**{k: v for k, v in sent[-1].items() if k != "subnet_id"})
+    check(
+        "Hostname: AT&amp;T &lt;hotspot&gt;" in text and "in Lab &amp; &lt;one&gt;," in text,
+        f"_announce_conflict: on a Jen with safe_text the same text is sent (got {text!r})",
+    )
+    check(
+        through == ["Lab & <one>", "static", "AT&T <hotspot>"],
+        f"and Jen's own safe_text is what escaped the subnet, the designation and the hostname (got {through})",
+    )
+    del api.safe_text
+    check(
+        b._alert_text("a & b") == "a &amp; b" and b._alert_text('say "hi"') == 'say "hi"' and b._alert_text(7) == "7",
+        "_alert_text: the fallback escapes &, < and >, leaves quotes, and takes a value that is not a string",
+    )
+    plugin_source = pathlib.Path(ROOT, "plugin.py").read_text(encoding="utf-8")
+    check(
+        plugin_source.count("send_alert(") == 1,
+        "plugin.py sends an alert in one place, so one place has to escape",
+    )
+
+    # ── 1.8.4 (BG6): the refusal names the read that failed ────────────────────────────────────────────────────────────
+    class _EntriesAway(FakeDB):
+        """Jen's database with ipam_static_entries unreadable: a read of it fails, anything else is recorded."""
+
+        def execute(self, sql, params=()):
+            if sql.split()[0].upper() == "SELECT" and "ipam_static_entries" in sql:
+                raise RuntimeError(1146, "Table 'jen.ipam_static_entries' doesn't exist")
+            super().execute(sql, params)
+
+    def _wrote(db):
+        return [st for st in db.statements if st[0] in ("INSERT", "UPDATE", "DELETE")]
+
+    b._kea_db = _kea_away
+    for loader, args, want in (
+        (b._load_kea_sets, (5, "10.5.0.0/24"), ("kea", "Kea's leases and reservations")),
+        (b._load_entries, ("kea", 5), ("entries", "IPAM's own entries")),
+    ):
+        b._jen_db = _EntriesAway
+        try:
+            loader(*args, strict=True)
+            got = None
+        except b._LookupFailed as e:
+            got = (getattr(e, "source", None), str(e))
+        check(got == want, f"{loader.__name__}: _LookupFailed says which read failed (got {got})")
+    check(
+        b.ENTRIES_REFUSAL == "Could not read IPAM's own entries - nothing was changed. Try again in a moment."
+        and b.LOOKUP_REFUSAL
+        == "Could not check Kea's leases and reservations - nothing was changed. Try again in a moment.",
+        "the two refusal sentences are the two the notes give",
+    )
+
+    said = []
+    b.flash = lambda msg, cat="message": said.append(msg)
+    b.redirect = lambda *a, **k: "back"
+    b.url_for = lambda *a, **k: "/x"
+    b.jsonify = lambda payload: payload
+    b._audit = lambda *a, **k: None
+    b.current_user.role = "admin"
+    b._check_access = lambda kind, sid, notify=True: {"name": "lan", "cidr": "10.5.0.0/24"}
+    b._subnet_ctx = lambda kind, sid, subnet: {"pools": [], "infrastructure": {}, "gateways": [], "dns": []}
+    real_kea_sets = b._load_kea_sets
+    kea_answers = lambda sid, cidr=None, strict=False: ({}, {})  # noqa: E731
+    sys.modules["flask"].g = types.SimpleNamespace(api_key={"name": "k", "subnet_access": None})
+    forms = {
+        "save_entry": {"ip": "10.5.0.30", "label": "x", "ipam_status": "static"},
+        "import_commit": {"payload": '[{"ip": "10.5.0.31", "status": "static"}]'},
+    }
+    for state, kea_sets, sentence, api_save, api_next in (
+        (
+            "IPAM's own table unreadable",
+            kea_answers,
+            b.ENTRIES_REFUSAL,
+            "IPAM's entries could not be read",
+            "IPAM's entries could not be read",
+        ),
+        (
+            "Kea's database away",
+            real_kea_sets,
+            b.LOOKUP_REFUSAL,
+            "Kea's leases and reservations could not be checked; nothing was changed",
+            "Kea's leases and reservations could not be read; no address is offered",
+        ),
+    ):
+        store = _EntriesAway()
+        b._jen_db = lambda store=store: store
+        b._load_kea_sets = kea_sets
+        for route in ("save_entry", "import_commit"):
+            said.clear()
+            b.request = types.SimpleNamespace(form=forms[route], args={})
+            getattr(b, route)("kea", 5)
+            check(
+                said == [sentence] and not _wrote(store),
+                f"{route}: with {state} the refusal names that read and nothing is written (got {said})",
+            )
+        sys.modules["flask"].request = types.SimpleNamespace(
+            get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.32"}
+        )
+        got = b._api_save_entry()
+        check(
+            got == ({"error": api_save}, 503) and not _wrote(store),
+            f"API save: with {state} the answer is 503 with the matching sentence and nothing is written (got {got})",
+        )
+        got = b._api_next_free(5)
+        check(
+            got == ({"error": api_next}, 503),
+            f"API next-free: with {state} the answer is 503 with the matching sentence and no address (got {got})",
+        )
+    said.clear()
+    b.request = types.SimpleNamespace(form={"action": "static", "first": "10.5.0.30", "last": "10.5.0.40"}, args={})
+    b.range_action("kea", 5)
+    check(
+        said == [b.LOOKUP_REFUSAL] and not _wrote(store),
+        f"range_action: it reads Kea only, and with Kea's database away it still says so (got {said})",
+    )
+    b.request = types.SimpleNamespace(args={"subnet_id": "5"})
+    got = b._api_list_entries()
+    check(
+        got == ({"error": "IPAM's entries could not be read"}, 503),
+        f"API list entries: the sentence it always used, the one the two other routes now share (got {got})",
+    )
+    logged = []
+    b.logger = types.SimpleNamespace(
+        error=logged.append, warning=logged.append, info=logged.append, debug=logged.append
+    )
+    api.subnet_map = lambda: {5: {"name": "lan", "cidr": "10.5.0.0/24"}}
+    b._load_kea_sets = kea_answers
+    found, unread = b._kea_conflicts()
+    check(
+        found == []
+        and unread == {5}
+        and any("could not read IPAM's own entries for subnet 5" in line for line in logged),
+        f"the conflict job: with IPAM's own table unreadable the subnet is unread and the log names that read (got {logged})",
+    )
+    logged.clear()
+    b._load_kea_sets = real_kea_sets
+    found, unread = b._kea_conflicts()
+    check(
+        unread == {5} and any("could not read Kea's leases and reservations for subnet 5" in line for line in logged),
+        f"the conflict job: with Kea's database away the log names Kea's read (got {logged})",
+    )
+
+    # ── 1.8.4 (BG7): the subnet page says when IPAM's own table could not be read, and offers no Next free ─────────────
+    b._load_kea_sets = kea_answers
+    b._history_rows = lambda *a, **k: []
+    b._devices_by_mac = lambda macs: {}
+    b.render_template = lambda name, **kw: kw
+    b.request = types.SimpleNamespace(args={}, form={})
+    page = b.subnet_detail("kea", 5)
+    check(
+        page.get("entries_unavailable") is True and page["next_free"] is None and page["kea_unavailable"] is False,
+        f"subnet_detail: with IPAM's own table unreadable the page opens, says so, and offers no next free address (got {page.get('entries_unavailable')}, {page['next_free']})",
+    )
+    check(
+        page["counts"]["total"] == 254 and not any(row.get("ipam") for row in page["rows"] if not row.get("run")),
+        "and it is drawn from Kea's answer alone",
+    )
+    b._load_kea_sets = real_kea_sets
+    page = b.subnet_detail("kea", 5)
+    check(
+        page.get("entries_unavailable") is True and page["kea_unavailable"] is True and page["next_free"] is None,
+        "subnet_detail: with both reads failing both notices are set and no next free address is offered",
+    )
+    b._load_kea_sets = kea_answers
+    b._load_entries = lambda kind, sid, strict=False: {}
+    page = b.subnet_detail("kea", 5)
+    check(
+        page.get("entries_unavailable") is False
+        and page["kea_unavailable"] is False
+        and page["next_free"] == "10.5.0.1",
+        "subnet_detail: with both reads answering, as before",
+    )
+    detail_page = pathlib.Path(ROOT, "templates", "ipam", "subnet.html").read_text(encoding="utf-8")
+    notice = re.search(r"\{% if entries_unavailable %\}\n(.*?)\n\{% endif %\}", detail_page, re.S)
+    kea_notice = re.search(r"\{% if kea_unavailable %\}\n(.*?)\n\{% endif %\}", detail_page, re.S)
+    check(
+        notice is not None
+        and notice.group(1).startswith('<div class="alert alert-danger" data-ipam-note="entries-unavailable">')
+        and "IPAM's own entries could not be read, so this page shows Kea's leases and reservations only and Next free is "
+        "switched off. Try again in a moment.{% endif %}</div>"
+        in notice.group(1),
+        "subnet.html: the page says when IPAM's own entries could not be read",
+    )
+    check(
+        notice is not None
+        and "{% if unmanaged %}IPAM's own entries could not be read, so this page shows no entries and Next free is "
+        "switched off. Try again in a moment.{% else %}IPAM's own entries"
+        in notice.group(1),
+        "subnet.html: on an unmanaged subnet, which has no Kea leases, the notice does not name them",
+    )
+    check(
+        kea_notice is not None
+        and notice is not None
+        and re.match(r"<div class=\"[^\"]+\"", kea_notice.group(1)).group(0)
+        == re.match(r"<div class=\"[^\"]+\"", notice.group(1)).group(0),
+        "subnet.html: the new notice is built like the one for Kea",
     )
 
     if failures:

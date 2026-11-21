@@ -1,5 +1,31 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.4] - 2026-11-21
+
+Three fixes from the executing pass on Jen 7.2.0-beta.4 (BG1, BG6, BG7), and one sentence of the 1.8.3 entry put right (BG9). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.
+
+### Fixed: a conflict on a client whose hostname holds `&` or `<` is announced on Telegram and Pushover (BG1)
+
+The conflict alert is an HTML message: its default template starts with `<b>`. The subnet's name, which an operator types, and the lease's hostname, which the device itself chooses, went into it as they were. Telegram and Pushover refuse a whole message that does not parse as HTML, so a conflict on a lease whose hostname was `AT&T <hotspot>`, or in a subnet named `Lab & <one>`, was never announced on those two channels. The check records a conflict as announced once it is stored and does not send it a second time, so that conflict stayed silent there for as long as it lasted.
+
+The subnet's name, the designation and the hostname are now escaped before they go into the alert, so the message reads `AT&amp;T &lt;hotspot&gt;` in its source and `AT&T <hotspot>` on the phone. Jen 7.2.0 has a function for this and the plugin uses it; on an older Jen the plugin does the same escape itself. The address and the MAC are not escaped, and the Timeline event, which is not HTML, keeps the names as typed. This is the fix Host Watchdog 1.1.4 made for its own alerts.
+
+### Fixed: a refusal names the read that failed (BG6)
+
+Since 1.8.3 a save, an import and the API refuse to decide anything from a lookup that did not answer. There was one sentence for that, and it named Kea: with IPAM's own table unreadable and Kea answering, a save was refused with *Could not check Kea's leases and reservations - nothing was changed*, which sends a person to look at the wrong database.
+
+There are now two sentences. When Kea's leases and reservations could not be read, the refusal is the one it was. When IPAM's own entries could not be read, a save and an import are refused with *Could not read IPAM's own entries - nothing was changed. Try again in a moment.*, and the API's save and next-free routes answer 503 with *IPAM's entries could not be read*, the sentence the entry list already used. The conflict check's log line names the read that failed in the same way. Nothing is written in either case, as before. A range action reads Kea only, so its refusal is unchanged.
+
+### Fixed: the subnet page says when IPAM's own entries could not be read, and offers no Next free (BG7)
+
+The subnet page reads two things: Kea's leases and reservations, and IPAM's own entries. 1.8.3 taught it to say so when the first could not be read. When the second could not be read the page still opened with no notice, drew every static and planned address as available or as a plain lease, and showed a Next free button that could name an address that is static or planned. A save from there was refused, so nothing wrong was stored, but the page itself was wrong and did not say so.
+
+The page now opens with a notice: *IPAM's own entries could not be read, so this page shows Kea's leases and reservations only and Next free is switched off. Try again in a moment.* No Next free button is shown in that state. On an unmanaged subnet, which has no Kea leases, the notice says the page shows no entries. The overview's counts, the CSV export and the view of every address still read the entries the way they did.
+
+### Corrected: what 1.8.3 said about opening a collapsed run (BG9)
+
+The 1.8.3 entry below is headed "no link opens more than 256 addresses of a collapsed run". The true statement is narrower. Each of `?ip=` (or `?at=`) and `?expand=` opens at most 256 addresses of the run it names, plus a remainder too short to collapse, which is up to three more. A URL made by hand that carries both, naming two different runs, opens both of them. The page itself never builds a link that carries both. No code changed for this.
+
 ## [1.8.3] - 2026-11-20
 
 Five fixes from the audit of 1.8.2 (IPAM-1, IPAM-2, IPAM-4, IPAM-5, IPAM-6), and one row of it checked and left alone (IPAM-3). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.
