@@ -675,8 +675,10 @@ def main():
 
     p.jsonify = lambda payload: payload
     p._accessible_subnets = _no_session
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
-    p._load_entries = lambda kind, sid: {"10.5.0.20": {"label": "NAS", "entry_status": "static", "is_static": 1}}
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
+    p._load_entries = lambda kind, sid, strict=False: {
+        "10.5.0.20": {"label": "NAS", "entry_status": "static", "is_static": 1}
+    }
     unrestricted = {"name": "k", "subnet_access": None}
     sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted)
     p.request = types.SimpleNamespace(args={"subnet_id": "5"})
@@ -689,12 +691,15 @@ def main():
     )
     result = p._api_next_free(5)
     check(result == {"ip": "10.5.0.1"}, f"API next-free: an allowed key gets an address with no session (got {result})")
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {"10.5.0.1": {"hostname": "", "mac": "", "host_id": 1}})
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: (
+        {},
+        {"10.5.0.1": {"hostname": "", "mac": "", "host_id": 1}},
+    )
     check(
         p._api_next_free(5) == {"ip": "10.5.0.2"},
         "API next-free: a reservation (a global one included) is never handed out",
     )
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
     fdb = FakeDB()
     p._jen_db = lambda: fdb
     sys.modules["flask"].request = types.SimpleNamespace(
@@ -705,7 +710,10 @@ def main():
         isinstance(result, dict) and result.get("ok") is True and any(s[0] == "INSERT" for s in fdb.statements),
         f"API save: an allowed key saves an entry with no session (got {result})",
     )
-    p._load_kea_sets = lambda sid, cidr=None: ({"10.5.0.7": {"hostname": "h", "mac": "aa:aa:aa:aa:aa:07"}}, {})
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: (
+        {"10.5.0.7": {"hostname": "h", "mac": "aa:aa:aa:aa:aa:07"}},
+        {},
+    )
     fdb = FakeDB()
     p._jen_db = lambda: fdb
     result = p._api_save_entry()
@@ -713,7 +721,7 @@ def main():
         isinstance(result, tuple) and result[1] == 409 and fdb.statements == [],
         f"API save: an address a lease holds cannot be newly designated (got {result})",
     )
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
     sys.modules["flask"].g = types.SimpleNamespace(api_key={"name": "k", "subnet_access": [1]})
     result = p._api_next_free(5)
     check(isinstance(result, tuple) and result[1] == 403, "API: a key scoped to another subnet is refused (403)")
@@ -862,13 +870,13 @@ def main():
     )
     devices_asked = []
     p._devices_by_mac = lambda macs: devices_asked.append(macs) or {}
-    p._load_kea_sets = lambda sid, cidr=None: (lz, rz)
-    p._load_entries = lambda kind, sid: ez
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: (lz, rz)
+    p._load_entries = lambda kind, sid, strict=False: ez
     p._build_address_space = lambda *a, **k: (_ for _ in ()).throw(AssertionError("the whole space was built"))
     sys.modules["jen.plugin_api"].subnet_map = lambda: {5: {"name": "n", "cidr": "10.5.0.0/24"}}
-    got = p._kea_conflicts()
+    got, unread = p._kea_conflicts()
     check(
-        [(sid, e["ip"]) for sid, _info, e in got] == [(5, "10.5.0.20")] and devices_asked == [],
+        [(sid, e["ip"]) for sid, _info, e in got] == [(5, "10.5.0.20")] and devices_asked == [] and unread == set(),
         "_kea_conflicts: no address space is built and no device is looked up (1.6.3)",
     )
 
@@ -1008,8 +1016,8 @@ def main():
     p.request = types.SimpleNamespace(args={"all": "1"}, form={})
     p._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.9.0.0/16"}
     p._subnet_ctx = lambda kind, sid, subnet: ctx_big
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
-    p._load_entries = lambda kind, sid: {}
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
+    p._load_entries = lambda kind, sid, strict=False: {}
     p._history_rows = lambda *a, **k: []
     p.render_template = lambda name, **kw: kw
     page = p.subnet_detail("kea", 9)
@@ -1041,8 +1049,8 @@ def main():
     # ── 1.6.4: the CSV export streams instead of building the whole subnet in memory ──
     p._check_access = lambda kind, sid, notify=True: {"name": "sub", "cidr": "10.9.0.0/24"}
     p._subnet_ctx = lambda kind, sid, subnet: ctx_big
-    p._load_kea_sets = lambda sid, cidr=None: (leases_big, res_big)
-    p._load_entries = lambda kind, sid: entries_big
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: (leases_big, res_big)
+    p._load_entries = lambda kind, sid, strict=False: entries_big
     p._devices_by_mac = lambda macs: {}
     resp = p.export_csv("kea", 9)
     body = resp.get_data()
@@ -1051,7 +1059,10 @@ def main():
         "export_csv: the streamed rows include the occupied addresses",
     )
     check("ip,status,hostname" in body, "export_csv: the header is the first streamed chunk")
-    p._load_kea_sets = lambda sid, cidr=None: ({"10.9.0.50": {"hostname": "=1+1", "mac": "aa:aa:aa:aa:aa:50"}}, {})
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: (
+        {"10.9.0.50": {"hostname": "=1+1", "mac": "aa:aa:aa:aa:aa:50"}},
+        {},
+    )
     body = p.export_csv("kea", 9).get_data()
     check(
         "'=1+1" in body and ",=1+1" not in body,
@@ -1217,7 +1228,7 @@ def main():
     p._jen_db = lambda: db
     got = p._investigate(subject, {5}, False)
     check(
-        got is not None and got["href"] == "/network/ipam/subnet/kea/5?ip=10.5.0.5" and got["status"] == "warn",
+        got is not None and got["href"] == "/network/ipam/subnet/kea/5?ip=10.5.0.5" and got["status"] == "ok",
         f"_investigate: the card for a seeded client, linking to its entry (got {got})",
     )
     check(
@@ -1311,8 +1322,8 @@ def main():
     # the per-row edit pencil and Create Reservation anyway, each leading only to "you cannot do that".
     p._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.9.0.0/24"}
     p._subnet_ctx = lambda kind, sid, subnet: ctx_big
-    p._load_kea_sets = lambda sid, cidr=None: ({}, {})
-    p._load_entries = lambda kind, sid: {}
+    p._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
+    p._load_entries = lambda kind, sid, strict=False: {}
     p._history_rows = lambda *a, **k: []
     p.render_template = lambda name, **kw: kw
     p.request = types.SimpleNamespace(args={}, form={})
@@ -1579,8 +1590,8 @@ def main():
     # the route: ?at= expands the run that holds the address and opens no modal; a foreign address is dropped
     m._check_access = lambda kind, sid, notify=True: {"name": "n", "cidr": "10.7.0.0/24"}
     m._subnet_ctx = lambda kind, sid, subnet: map_ctx
-    m._load_kea_sets = lambda sid, cidr=None: (map_leases, map_res)
-    m._load_entries = lambda kind, sid: map_entries
+    m._load_kea_sets = lambda sid, cidr=None, strict=False: (map_leases, map_res)
+    m._load_entries = lambda kind, sid, strict=False: map_entries
     m._devices_by_mac = lambda macs: {}
     m._history_rows = lambda *a, **k: []
     m.render_template = lambda name, **kw: kw
@@ -1809,6 +1820,322 @@ def main():
     check(
         width_scanned >= 5 and not width_offenders,
         f"every @media with a width names the screen, so print is not taken for a phone ({width_scanned} files; {width_offenders})",
+    )
+
+    # ── 1.8.3 (IPAM-1, IPAM-5): "the lookup failed" is not "nothing there" ────────────────────────────────────────────
+    s = load_plugin()
+    _stub_jen_plugin_api()
+
+    def _kea_away():
+        raise RuntimeError(2013, "Lost connection to MySQL server during query")
+
+    s._kea_db = _kea_away
+    check(
+        s._load_kea_sets(5, "10.5.0.0/24") == ({}, {}),
+        "_load_kea_sets: a page still gets two empty dicts from a read that failed",
+    )
+    try:
+        s._load_kea_sets(5, "10.5.0.0/24", strict=True)
+        raised = None
+    except s._LookupFailed as e:
+        raised = str(e)
+    check(
+        raised == "Kea's leases and reservations",
+        f"_load_kea_sets: a caller that decides gets _LookupFailed (got {raised!r})",
+    )
+    s._jen_db = _kea_away
+    check(s._load_entries("kea", 5) == {}, "_load_entries: a page still gets an empty dict from a read that failed")
+    try:
+        s._load_entries("kea", 5, strict=True)
+        raised = None
+    except s._LookupFailed as e:
+        raised = str(e)
+    check(raised == "IPAM's own entries", f"_load_entries: a caller that decides gets _LookupFailed (got {raised!r})")
+
+    class _Store:
+        """Jen's database for the conflict job: keeps ipam_conflict_state, logs every statement and what happened around it."""
+
+        def __init__(self, fail_on=None, fail_commit=False):
+            self.rows, self.next_id, self.log, self.events = {}, 1, [], []
+            self.pending, self.fail_on, self.fail_commit, self._answer = None, fail_on, fail_commit, None
+
+        def cursor(self):
+            if self.pending is None:
+                self.pending = dict(self.rows)
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            sql = " ".join(sql.split())
+            self.log.append(sql)
+            if self.fail_on and self.fail_on in sql:
+                raise RuntimeError("statement failed")
+            if sql.startswith("SELECT id FROM ipam_conflict_state WHERE"):
+                hit = [i for i, k in self.pending.items() if k == tuple(params)]
+                self._answer = {"id": hit[0]} if hit else None
+            elif sql.startswith("INSERT INTO ipam_conflict_state"):
+                self.pending[self.next_id] = tuple(params)
+                self.next_id += 1
+            elif sql.startswith("SELECT id, ip, subnet_kind, subnet_id FROM ipam_conflict_state"):
+                self._answer = [
+                    {"id": i, "ip": k[0], "subnet_kind": k[1], "subnet_id": k[2]} for i, k in self.pending.items()
+                ]
+            elif sql.startswith("DELETE FROM ipam_conflict_state"):
+                self.pending.pop(params[0], None)
+
+        def fetchone(self):
+            return self._answer
+
+        def fetchall(self):
+            return self._answer or []
+
+        def commit(self):
+            if self.fail_commit:
+                raise RuntimeError("commit failed")
+            self.rows, self.pending = dict(self.pending), None
+            self.events.append("commit")
+
+        def rollback(self):
+            self.pending = None
+            self.events.append("rollback")
+
+        def close(self):
+            self.pending = None
+            self.events.append("close")
+
+    api = sys.modules["jen.plugin_api"]
+    api.subnet_map = lambda: {5: {"name": "lan", "cidr": "10.5.0.0/24"}, 6: {"name": "lab", "cidr": "10.6.0.0/24"}}
+    kea_up = {"up": True}
+    standing = {
+        5: ({"10.5.0.20": {"hostname": "nas", "mac": "aa:aa:aa:aa:aa:20"}}, {}),
+        6: ({"10.6.0.9": {"hostname": "cam", "mac": "aa:aa:aa:aa:aa:09"}}, {}),
+    }
+
+    def _sets(sid, cidr=None, strict=False):
+        if not kea_up["up"]:
+            if strict:
+                raise s._LookupFailed("Kea's leases and reservations")
+            return {}, {}
+        return standing[sid]
+
+    static = {"label": "x", "entry_status": "static", "is_static": 1}
+    s._load_kea_sets = _sets
+    s._load_entries = lambda kind, sid, strict=False: {"10.5.0.20": static} if sid == 5 else {"10.6.0.9": static}
+    store = _Store()
+    s._jen_db = lambda: store
+    announced = []
+    s._announce_conflict = lambda sid, info, entry: announced.append((entry["ip"], list(store.events)))
+    s._check_conflicts()
+    check(
+        sorted(ip for ip, _e in announced) == ["10.5.0.20", "10.6.0.9"] and len(store.rows) == 2,
+        f"_check_conflicts: two new conflicts are tracked and announced once each (got {announced})",
+    )
+    check(
+        all(events[-2:] == ["commit", "close"] for _ip, events in announced),
+        f"_check_conflicts: each is announced after the commit and after the connection is closed (IPAM-2) (got {announced})",
+    )
+    announced.clear()
+    s._check_conflicts()
+    check(announced == [], "_check_conflicts: a standing conflict is not announced again")
+    kea_up["up"] = False
+    s._check_conflicts()
+    check(
+        len(store.rows) == 2 and announced == [],
+        f"_check_conflicts: a run with the Kea database away keeps every tracking row (IPAM-1) (got {store.rows})",
+    )
+    kea_up["up"] = True
+    s._check_conflicts()
+    check(announced == [], f"_check_conflicts: the next good run announces nothing a second time (got {announced})")
+    standing[6] = ({}, {})
+    s._check_conflicts()
+    check(
+        sorted(k[0] for k in store.rows.values()) == ["10.5.0.20"],
+        f"_check_conflicts: a conflict that really ended in a subnet that was read is forgotten (got {store.rows})",
+    )
+    api.subnet_map = dict
+    s._check_conflicts()
+    check(len(store.rows) == 1, "_check_conflicts: an empty subnet list forgets nothing")
+    api.subnet_map = lambda: {5: {"name": "lan", "cidr": "10.5.0.0/24"}, 6: {"name": "lab", "cidr": "10.6.0.0/24"}}
+
+    # IPAM-2: a statement or a commit that fails after the INSERT sends nothing, and the next run sends it once
+    for label, broken in (
+        ("the stale sweep fails", _Store(fail_on="SELECT id, ip, subnet_kind, subnet_id")),
+        ("the commit fails", _Store(fail_commit=True)),
+    ):
+        announced.clear()
+        s._jen_db = lambda broken=broken: broken
+        s._check_conflicts()
+        check(
+            announced == [] and broken.rows == {},
+            f"_check_conflicts: when {label}, no alert is sent for a row that was not stored (got {announced})",
+        )
+        broken.fail_on, broken.fail_commit = None, False
+        s._check_conflicts()
+        check(
+            [ip for ip, _e in announced] == ["10.5.0.20"],
+            f"_check_conflicts: after {label}, the next run announces the conflict exactly once (got {announced})",
+        )
+
+    # IPAM-5: every caller that DECIDES from the lookup refuses, and writes nothing
+    r = load_plugin()
+    _stub_jen_plugin_api()
+    said = []
+    writes = FakeDB()
+    r.flash = lambda msg, cat="message": said.append(msg)
+    r.redirect = lambda *a, **k: "back"
+    r.url_for = lambda *a, **k: "/x"
+    r.jsonify = lambda payload: payload
+    r.current_user.role = "admin"
+    r._check_access = lambda kind, sid, notify=True: {"name": "lan", "cidr": "10.5.0.0/24"}
+    r._subnet_ctx = lambda kind, sid, subnet: {"pools": [], "infrastructure": {}, "gateways": [], "dns": []}
+    r._kea_db = _kea_away
+    r._jen_db = lambda: writes
+    r.request = types.SimpleNamespace(form={"ip": "10.5.0.30", "label": "x", "ipam_status": "static"}, args={})
+    r.save_entry("kea", 5)
+    check(
+        said == [r.LOOKUP_REFUSAL] and not any(st[0] in ("INSERT", "UPDATE", "DELETE") for st in writes.statements),
+        f"save_entry: with Kea's database away the save is refused in one sentence and nothing is written (got {said})",
+    )
+    said.clear()
+    r.request = types.SimpleNamespace(form={"action": "static", "first": "10.5.0.30", "last": "10.5.0.40"}, args={})
+    r.range_action("kea", 5)
+    check(
+        said == [r.LOOKUP_REFUSAL] and not any(st[0] in ("INSERT", "UPDATE", "DELETE") for st in writes.statements),
+        f"range_action: the same refusal, nothing written (got {said})",
+    )
+    said.clear()
+    r.request = types.SimpleNamespace(form={"payload": '[{"ip": "10.5.0.31", "status": "static"}]'}, args={})
+    r.import_commit("kea", 5)
+    check(
+        said == [r.LOOKUP_REFUSAL] and not any(st[0] in ("INSERT", "UPDATE", "DELETE") for st in writes.statements),
+        f"import_commit: the same refusal, and nothing is written (got {said})",
+    )
+    unrestricted_key = {"name": "k", "subnet_access": None}
+    sys.modules["flask"].g = types.SimpleNamespace(api_key=unrestricted_key)
+    got = r._api_next_free(5)
+    check(
+        isinstance(got, tuple) and got[1] == 503 and "ip" not in got[0],
+        f"API next-free: with Kea's database away the answer is 503 and no address (got {got})",
+    )
+    sys.modules["flask"].request = types.SimpleNamespace(
+        get_json=lambda silent=True: {"subnet_id": 5, "ip": "10.5.0.32"}
+    )
+    got = r._api_save_entry()
+    check(
+        isinstance(got, tuple) and got[1] == 503 and not any(st[0] == "INSERT" for st in writes.statements),
+        f"API save: 503 and nothing written (got {got})",
+    )
+    r._jen_db = _kea_away
+    r.request = types.SimpleNamespace(args={"subnet_id": "5"})
+    got = r._api_list_entries()
+    check(
+        isinstance(got, tuple) and got[1] == 503,
+        f"API list entries: entries that could not be read are 503, not an empty list (got {got})",
+    )
+    r._jen_db = lambda: writes
+    r._load_entries = lambda kind, sid, strict=False: {}
+    r._history_rows = lambda *a, **k: []
+    r._devices_by_mac = lambda macs: {}
+    r.render_template = lambda name, **kw: kw
+    r.request = types.SimpleNamespace(args={}, form={})
+    page = r.subnet_detail("kea", 5)
+    check(
+        page["kea_unavailable"] is True and page["next_free"] is None,
+        "subnet_detail: with Kea's database away the page opens, says so, and offers no next free address",
+    )
+    r._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
+    page = r.subnet_detail("kea", 5)
+    check(
+        page["kea_unavailable"] is False and page["next_free"] == "10.5.0.1",
+        "subnet_detail: with Kea answering, as before",
+    )
+
+    # ── 1.8.3 (IPAM-4): no URL opens more than _MAX_EXPAND addresses of a run ──────────────────────────────────────────
+    v = load_plugin()
+    net16 = ipaddress.IPv4Network("10.20.0.0/16")
+    bare = {"pools": [], "infrastructure": {}}
+    whole = v._build_rows_lazy(net16, {}, {}, {}, bare, {})
+    check(len(whole) == 1 and whole[0]["count"] == 65534, "a sparse /16 is one run by default")
+    opened = v._build_rows_lazy(net16, {}, {}, {}, bare, {}, expand=whole[0]["key"])
+    shown = [row for row in opened if not row.get("run")]
+    check(
+        len(shown) == v._MAX_EXPAND and shown[0]["ip"] == "10.20.0.1" and len(opened) == v._MAX_EXPAND + 1,
+        f"?expand= of the whole /16 run opens its first {v._MAX_EXPAND} addresses and leaves one run (got {len(shown)} rows, {len(opened)} in all)",
+    )
+    rest = opened[-1]
+    check(
+        rest["run"] and rest["first"] == "10.20.1.1" and rest["count"] == 65534 - v._MAX_EXPAND,
+        f"the rest stays a run that starts where the open part ended (got {rest})",
+    )
+    again = v._build_rows_lazy(net16, {}, {}, {}, bare, {}, expand=rest["key"])
+    shown = [row for row in again if not row.get("run")]
+    check(
+        len(shown) == v._MAX_EXPAND and shown[0]["ip"] == "10.20.1.1" and again[0]["run"] and again[-1]["run"],
+        "opening that run shows the next 256, with a run before and a run after",
+    )
+    focused = v._build_rows_lazy(net16, {}, {}, {}, bare, {}, focus="10.20.100.7")
+    shown = [row["ip"] for row in focused if not row.get("run")]
+    check(
+        len(shown) == v._MAX_EXPAND and "10.20.100.7" in shown and len(focused) == v._MAX_EXPAND + 2,
+        f"?ip= / ?at= opens {v._MAX_EXPAND} addresses around the one asked for (got {len(shown)})",
+    )
+    first_free = v._build_rows_lazy(net16, {}, {}, {}, bare, {}, focus="10.20.0.1")
+    check(
+        sum(1 for row in first_free if not row.get("run")) == v._MAX_EXPAND and first_free[0]["ip"] == "10.20.0.1",
+        "the Next free button on a sparse /16 (the first address) draws 256 rows, not 65,534",
+    )
+    last_one = v._build_rows_lazy(net16, {}, {}, {}, bare, {}, focus="10.20.255.254")
+    check(
+        [row["ip"] for row in last_one if not row.get("run")][-1] == "10.20.255.254"
+        and sum(1 for row in last_one if not row.get("run")) == v._MAX_EXPAND,
+        "a focus at the end of the run opens the last 256",
+    )
+    check(
+        v._expand_window(10, 20, (10, 19), None) == (10, 20), "_expand_window: a run shorter than the cap opens whole"
+    )
+    check(
+        v._expand_window(10, 20, (5, 19), None) is None,
+        "_expand_window: a range that is not inside this run opens nothing",
+    )
+    check(v._expand_window(10, 20, None, 25) is None, "_expand_window: a focus outside this run opens nothing")
+
+    # ── 1.8.3 (IPAM-6): a reservation on a designated address is not the conflict IPAM flags ──────────────────────────
+    entry = {
+        "ip": "10.5.0.20",
+        "label": "nas",
+        "owner": "",
+        "entry_status": "static",
+        "is_static": 1,
+        "mac": "",
+        "hostname": "",
+    }
+    reserved_card = v.investigation_card([entry], {"10.5.0.20": "reservation"})
+    check(
+        reserved_card["status"] == "ok"
+        and "also a Kea reservation" in reserved_card["summary"]
+        and "conflict" not in reserved_card["summary"],
+        f"investigation_card: static in IPAM and reserved in Kea is an ok card (got {reserved_card})",
+    )
+    check(
+        v.investigation_card([entry], {"10.5.0.20": "lease"})["status"] == "warn",
+        "investigation_card: static in IPAM and held by a lease is still the warning",
+    )
+    check(
+        v._conflicts_in(
+            {}, {"10.5.0.20": {"hostname": "", "mac": "", "host_id": 1}}, {"10.5.0.20": entry}, lambda ip: True
+        )
+        == [],
+        "and that is the same answer the periodic job gives for it",
+    )
+    detail_page = pathlib.Path(ROOT, "templates", "ipam", "subnet.html").read_text(encoding="utf-8")
+    check(
+        "{% if kea_unavailable %}" in detail_page and 'data-ipam-note="kea-unavailable"' in detail_page,
+        "subnet.html: the page says when Kea's leases and reservations could not be read",
     )
 
     if failures:

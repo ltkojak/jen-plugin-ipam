@@ -1,5 +1,37 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.3] - 2026-11-20
+
+Five fixes from the audit of 1.8.2 (IPAM-1, IPAM-2, IPAM-4, IPAM-5, IPAM-6), and one row of it checked and left alone (IPAM-3). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.
+
+### Fixed: one run with the Kea database away no longer announces every conflict again (IPAM-1)
+
+The conflict check runs every fifteen minutes, announces a new conflict once, and forgets a conflict that has ended so that a recurrence is announced again. When Kea's database did not answer for one run, the read came back empty, the check took that as "no conflicts anywhere" and forgot all of them, and on the next good run every conflict that had never gone away was announced a second time, with a second Timeline event. A conflict is now forgotten only in a subnet whose leases, reservations and entries were read in that run. A run that could read no subnet at all, or found Jen's subnet list empty, forgets nothing.
+
+### Fixed: a conflict alert is sent only after its record is stored (IPAM-2)
+
+The alert and the Timeline event were sent in the middle of the database transaction that records the conflict as announced. Any statement after that which failed, the commit included, undid the record, and the same conflict was announced again on every run for as long as the failure lasted. The check now records every new conflict, commits, closes the connection and only then sends the alerts and events. If the commit fails nothing is sent, and the next run finds the conflict and announces it once.
+
+### Fixed: when Kea's leases cannot be read, nothing is decided from an empty answer (IPAM-5)
+
+The same empty answer reached everything that decides something from it. With Kea's database away, the next-free API answered 200 with the first address of the subnet even when a lease held it; saving an entry, a range action, an import and the API's save skipped the check that a lease or a reservation already owns the address; and the subnet page drew every address as available.
+
+Now a save, a range action and an import are refused with *Could not check Kea's leases and reservations - nothing was changed. Try again in a moment.* and write nothing. The three API routes answer 503 with a sentence and no address or entry list. The subnet page still opens, on IPAM's own entries, with a notice that Kea's leases and reservations could not be read and no Next free button.
+
+### Fixed: no link opens more than 256 addresses of a collapsed run (IPAM-4)
+
+Showing every address is offered up to a /22. Two other ways of opening a collapsed run had no limit: a link to one address (`?ip=`, `?at=`, used by search, the Investigation card, the address map and the page's own Next free button) opened the whole run that holds it, and so did `?expand=`. On a sparse large subnet one run is nearly the whole subnet, so Next free on an unmanaged /16 with a few entries answered with 65,534 table rows.
+
+Opening a run now shows at most 256 of its addresses: around the address asked for, or from the start of the range asked for. What is left on either side stays a run, and opening that run shows the next 256.
+
+### Fixed: the Investigation card no longer calls a reservation a conflict (IPAM-6)
+
+For an address marked static or planned in IPAM that is also a Kea reservation, the card said *held by a Kea reservation - IPAM flags that as a conflict* and turned the page's one-line answer into a warning. IPAM does not flag that: the subnet page shows the address as reserved, the counts hold no conflict and the periodic check leaves reservations out. Reserving in Kea an address you marked static is ordinary. The card now says *also a Kea reservation* and stays an ordinary card. A designated address held by a DHCP lease is still the warning it was.
+
+### Checked and not changed: a large import at Confirm Import (IPAM-3)
+
+The audit reported that an import inside the documented limits (2,000 rows, 2 MB) fails at Confirm Import with *413 Request Entity Too Large*, because the previewed rows travel back as one form field and the web framework refuses a form above 500,000 bytes. That was measured on Werkzeug 3.1.8. Jen requires Werkzeug 3.1.9 or later, which no longer applies that limit to this kind of form, and in Jen itself a 2,000-row import with a form of over a million bytes is confirmed and stored. Nothing was changed. Jen 7.2.0-beta.4 adds a test that puts a 2,000-row file through the real preview and confirm pages, so a change in the framework that brought the limit back would be seen.
+
 ## [1.8.2] - 2026-11-13
 
 ### Changed: the address map is redrawn

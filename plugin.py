@@ -69,6 +69,8 @@ _COLLAPSE_PREFIX = 32
 _MIN_RUN = 4
 # ?all=1 (every address, uncollapsed) is refused above this size (v1.6.4): a /16 is 65,534 rows.
 _MAX_ALL_PREFIX = 22
+# v1.8.3 (IPAM-4) - the most addresses of ONE collapsed run that are ever drawn as rows, whatever asked for it
+_MAX_EXPAND = 256
 # Range operations (mark/clear a from–to span) are capped per action.
 _RANGE_MAX = 1024
 
@@ -333,7 +335,18 @@ def _devices_by_mac(macs):
 # ── Address space ─────────────────────────────────────────────────────────────
 
 
-def _load_kea_sets(subnet_id, cidr=None):
+class _LookupFailed(Exception):
+    """v1.8.3 (IPAM-1, IPAM-5) - a lookup did not answer. "Nothing there" and "could not ask" were one answer: with the Kea
+    database away, `_load_kea_sets` returned two empty dicts, so the conflict job read "no conflicts" and forgot every one
+    it had announced, next-free handed out an address a lease held, and a save skipped the check that a lease or a
+    reservation already owns the address. A caller that DECIDES something from the answer passes `strict=True` and gets
+    this; a page that only shows the answer still gets the empty one."""
+
+
+LOOKUP_REFUSAL = "Could not check Kea's leases and reservations - nothing was changed. Try again in a moment."
+
+
+def _load_kea_sets(subnet_id, cidr=None, strict=False):
     """(active_leases {ip: {hostname, mac}}, reservations {ip: {hostname, mac, host_id}}).
 
     An "active lease" is Jen's own definition (client_subject.py): state 0 AND not past its expiry
@@ -399,13 +412,15 @@ def _load_kea_sets(subnet_id, cidr=None):
                 }
     except Exception as e:
         logger.error(f"IPAM: Kea DB error for subnet {subnet_id}: {e}")
+        if strict:
+            raise _LookupFailed("Kea's leases and reservations") from e
     finally:
         if db:
             db.close()
     return active_leases, reservations
 
 
-def _load_entries(db_kind, subnet_id):
+def _load_entries(db_kind, subnet_id, strict=False):
     ipam_entries = {}
     db = None
     try:
@@ -423,6 +438,8 @@ def _load_entries(db_kind, subnet_id):
                 ipam_entries[row["ip"]] = row
     except Exception as e:
         logger.error(f"IPAM: entries error for {db_kind}/{subnet_id}: {e}")
+        if strict:
+            raise _LookupFailed("IPAM's own entries") from e
     finally:
         if db:
             db.close()
@@ -739,15 +756,74 @@ def _run_boundaries(network, ctx, occupied):
     return sorted(p for p in points if lo <= p <= hi + 1)
 
 
-def _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=None, min_run=_MIN_RUN):
+def _expand_window(a, b, expand, focus):
+    """Pure: the half-open part `[start, end)` of the run `[a, b)` to show as rows, or None to leave it collapsed.
+
+    v1.8.3 (IPAM-4) - at most `_MAX_EXPAND` addresses of a run are ever rows. `focus` (an address as an int: `?ip=`, `?at=`)
+    inside the run opens that many around it; `expand` (`?expand=first-last`, as two ints) lying inside the run opens that
+    range from its first address. Until 1.8.2 either one opened the WHOLE run, and on a sparse large subnet one run is
+    nearly the whole subnet: the page's own Next free button on an unmanaged /16 answered with 65,534 table rows. What is
+    left on each side stays a run with its own `first-last` key, so opening it shows the next `_MAX_EXPAND`."""
+    if focus is not None and a <= focus < b:
+        start = max(a, focus - _MAX_EXPAND // 2)
+        end = min(b, start + _MAX_EXPAND)
+        return max(a, end - _MAX_EXPAND), end
+    if expand is not None and a <= expand[0] and expand[1] < b:
+        return expand[0], min(expand[1] + 1, expand[0] + _MAX_EXPAND)
+    return None
+
+
+def _expand_range(expand):
+    """`"first-last"` (already validated by `_parse_expand`) as two ints, or None."""
+    if not expand or "-" not in expand:
+        return None
+    first, _, last = expand.partition("-")
+    try:
+        return int(ipaddress.IPv4Address(first)), int(ipaddress.IPv4Address(last))
+    except ValueError:
+        return None
+
+
+def _build_rows_lazy(
+    network, active_leases, reservations, ipam_entries, ctx, devices, expand=None, min_run=_MIN_RUN, focus=None
+):
     """Pure: the SAME rows `_collapse_runs(_compose_space(...), collapse=True, expand, min_run)` would
     give for this subnet, without ever materializing the full address list. Every occupied address
     (`_occupied_addresses`) becomes its own entry row via `_compose_entry`; the address ranges between
     them collapse into run rows (or, when shorter than `min_run`, individual 'available' rows) exactly
     as the old builder did — `_run_boundaries` guarantees no boundary interval mixes occupied and
-    available addresses, or two different in_pool states."""
+    available addresses, or two different in_pool states. The one difference since 1.8.3: an expanded
+    run shows at most `_MAX_EXPAND` of its addresses (`_expand_window`)."""
     occupied = _occupied_addresses(active_leases, reservations, ipam_entries, ctx)
     bounds = _run_boundaries(network, ctx, occupied)
+    expand_range = _expand_range(expand)
+    try:
+        focus_value = int(ipaddress.IPv4Address(focus)) if focus else None
+    except ValueError:
+        focus_value = None
+
+    def entries(start, end):
+        return [
+            _compose_entry(str(ipaddress.IPv4Address(v)), active_leases, reservations, ipam_entries, ctx, devices)
+            for v in range(start, end)
+        ]
+
+    def collapsed(start, end, in_pool):
+        """The part of a run that stays closed: a run row, or its addresses when it is shorter than a run."""
+        if end - start < min_run:
+            return entries(start, end)
+        first, last = str(ipaddress.IPv4Address(start)), str(ipaddress.IPv4Address(end - 1))
+        return [
+            {
+                "run": True,
+                "first": first,
+                "last": last,
+                "count": end - start,
+                "in_pool": in_pool,
+                "key": f"{first}-{last}",
+            }
+        ]
+
     rows = []
     for a, b in zip(bounds, bounds[1:], strict=False):
         length = b - a
@@ -757,22 +833,15 @@ def _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, de
             continue
         in_pool = _in_pool(ctx, first_ip)
         if length < min_run:
-            rows.extend(
-                _compose_entry(str(ipaddress.IPv4Address(v)), active_leases, reservations, ipam_entries, ctx, devices)
-                for v in range(a, b)
-            )
+            rows.extend(entries(a, b))
             continue
-        last_ip = str(ipaddress.IPv4Address(b - 1))
-        key = f"{first_ip}-{last_ip}"
-        if expand == key:
-            rows.extend(
-                _compose_entry(str(ipaddress.IPv4Address(v)), active_leases, reservations, ipam_entries, ctx, devices)
-                for v in range(a, b)
-            )
-        else:
-            rows.append(
-                {"run": True, "first": first_ip, "last": last_ip, "count": length, "in_pool": in_pool, "key": key}
-            )
+        window = _expand_window(a, b, expand_range, focus_value)
+        if window is None:
+            rows.extend(collapsed(a, b, in_pool))
+            continue
+        rows.extend(collapsed(a, window[0], in_pool))
+        rows.extend(entries(*window))
+        rows.extend(collapsed(window[1], b, in_pool))
     return rows
 
 
@@ -1132,7 +1201,15 @@ def subnet_detail(kind, subnet_id):
 
     ctx = _subnet_ctx(kind, subnet_id, subnet)
     db_kind = _KIND_DB[kind]
-    active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
+    # v1.8.3 (IPAM-5) - the page still opens when Kea's database does not answer, on IPAM's own entries, and SAYS so: every
+    # address used to be drawn as available, with a Next free button that could name one a lease holds.
+    kea_unavailable = False
+    active_leases, reservations = {}, {}
+    if kind == "kea":
+        try:
+            active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+        except _LookupFailed:
+            kea_unavailable = True
     ipam_entries = _load_entries(db_kind, subnet_id)
     devices = {}
     if kind == "kea":
@@ -1172,16 +1249,11 @@ def subnet_detail(kind, subnet_id):
             total, lambda ip: _host_in_network(network, ip), active_leases, reservations, ipam_entries, ctx
         )
         expand = _parse_expand(request.args.get("expand", ""), network)
-        rows = _build_rows_lazy(network, active_leases, reservations, ipam_entries, ctx, devices, expand=expand)
-        if focus_ip and not any(not r.get("run") and r["ip"] == focus_ip for r in rows):
-            for r in rows:
-                if r.get("run") and int(ipaddress.IPv4Address(r["first"])) <= int(
-                    ipaddress.IPv4Address(focus_ip)
-                ) <= int(ipaddress.IPv4Address(r["last"])):
-                    rows = _build_rows_lazy(
-                        network, active_leases, reservations, ipam_entries, ctx, devices, expand=r["key"]
-                    )
-                    break
+        # v1.8.3 (IPAM-4) - one build: the run that holds `focus_ip` opens around it, a run that holds `expand` opens from
+        # its first address, and neither opens more than `_MAX_EXPAND` addresses.
+        rows = _build_rows_lazy(
+            network, active_leases, reservations, ipam_entries, ctx, devices, expand=expand, focus=focus_ip
+        )
         next_free = _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)
         address_map = _address_map(network, active_leases, reservations, ipam_entries, ctx)
     else:
@@ -1204,7 +1276,8 @@ def subnet_detail(kind, subnet_id):
         counts=counts,
         ctx=ctx,
         pool_texts=[t for _f, _l, t in ctx.get("pools", [])],
-        next_free=next_free,
+        next_free=None if kea_unavailable else next_free,
+        kea_unavailable=kea_unavailable,
         recent_history=_history_rows(_KIND_DB[kind], subnet_id, limit=15),
         status_filter=status_filter,
         open_ip=open_ip,
@@ -1499,9 +1572,14 @@ def import_commit(kind, subnet_id):
 
     # v1.6.4 — the same rule save_entry and the API apply: a row importing static/planned onto an
     # address a live Kea lease or reservation already holds is rejected, not written over it. Loaded
-    # once for the whole import rather than per row.
-    leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
-    existing_entries = _load_entries(db_kind, subnet_id)
+    # once for the whole import rather than per row. v1.8.3 (IPAM-5): a lookup that does not answer
+    # refuses the import; the preview page still holds the rows, so Confirm Import can be pressed again.
+    try:
+        leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True) if kind == "kea" else ({}, {})
+        existing_entries = _load_entries(db_kind, subnet_id, strict=True)
+    except _LookupFailed:
+        flash(LOOKUP_REFUSAL, "error")
+        return redirect(detail_url)
 
     saved = 0
     rejected = 0
@@ -1614,8 +1692,13 @@ def save_entry(kind, subnet_id):
         return redirect(detail_url)
 
     if kind == "kea" and ipam_status in _DESIGNATED:
-        leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"])
-        blocked = _designation_blocker(ip, ipam_status, leases_now, res_now, _load_entries(db_kind, subnet_id).get(ip))
+        try:
+            leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+            existing = _load_entries(db_kind, subnet_id, strict=True).get(ip)
+        except _LookupFailed:
+            flash(LOOKUP_REFUSAL, "error")
+            return redirect(detail_url)
+        blocked = _designation_blocker(ip, ipam_status, leases_now, res_now, existing)
         if blocked:
             flash(blocked, "error")
             return redirect(detail_url)
@@ -1759,7 +1842,11 @@ def range_action(kind, subnet_id):
     # Never overwrite a reservation's or a live lease's address silently.
     skipped = set()
     if kind == "kea" and action != "clear":
-        leases, res = _load_kea_sets(subnet_id, subnet["cidr"])
+        try:
+            leases, res = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+        except _LookupFailed:
+            flash(LOOKUP_REFUSAL, "error")
+            return redirect(detail_url)
         skipped = (set(leases) | set(res)) & set(ips)
         ips = [ip for ip in ips if ip not in skipped]
 
@@ -1953,32 +2040,50 @@ def _kea_conflicts():
 
     1.6.3: this built the whole address space of every subnet every fifteen minutes (65,534 dicts for a
     /16) and ran one `devices` query per lease and reservation MAC, though the check never reads a
-    device. It is now the two Kea sets and the entries of each subnet and a set intersection."""
+    device. It is now the two Kea sets and the entries of each subnet and a set intersection.
+
+    Returns `(conflicts, unread)`. `unread` is the ids of the subnets whose leases, reservations or entries could not be
+    READ this run (v1.8.3, IPAM-1), or None when Jen's subnet list itself is empty or could not be read: for those the run
+    knows nothing, which is not the same as knowing there is no conflict."""
     from jen.plugin_api import subnet_map
 
-    out = []
-    for sid, info in subnet_map().items():
+    out, unread = [], set()
+    try:
+        subnets = subnet_map()
+    except Exception as e:
+        logger.error(f"IPAM: conflict scan could not read Jen's subnets: {e}")
+        return out, None
+    if not subnets:
+        return out, None
+    for sid, info in subnets.items():
         try:
             network = ipaddress.IPv4Network(info["cidr"], strict=False)
-            leases, res = _load_kea_sets(sid, info["cidr"])
-            entries = _load_entries("kea", sid)
+            leases, res = _load_kea_sets(sid, info["cidr"], strict=True)
+            entries = _load_entries("kea", sid, strict=True)
         except Exception as e:
             logger.error(f"IPAM: conflict scan failed for subnet {sid}: {e}")
+            unread.add(sid)
             continue
         for entry in _conflicts_in(leases, res, entries, lambda ip, n=network: _host_in_network(n, ip)):
             out.append((sid, info, entry))
-    return out
+    return out, unread
 
 
 def _check_conflicts():
     """Periodic job (every 15 min): alert once per NEW conflict and drop
     tracking rows for conflicts that have resolved, so a recurrence alerts
     again — the same 'alert only once per new occurrence' rule Network
-    Discovery uses for rogue devices."""
-    from jen.plugin_api import emit, send_alert
+    Discovery uses for rogue devices.
 
-    conflicts = _kea_conflicts()
+    v1.8.3 - two rules this job did not keep. (IPAM-1) A tracking row is dropped only for a subnet that was READ this run:
+    one run with the Kea database away used to read as "no conflicts anywhere", drop every row, and announce every standing
+    conflict again on the next good run. (IPAM-2) An alert is sent only for a conflict whose tracking row was COMMITTED,
+    after the connection is closed: the alert used to go out inside the transaction, so any later statement that failed
+    rolled the row back and the same conflict was announced again on every run while the failure lasted."""
+    conflicts, unread = _kea_conflicts()
     seen_keys = set()
+    new = []
+    committed = False
     db = None
     try:
         db = _jen_db()
@@ -1992,32 +2097,62 @@ def _check_conflicts():
                     cur.execute("UPDATE ipam_conflict_state SET last_seen=UTC_TIMESTAMP() WHERE id=%s", (row["id"],))
                     continue
                 cur.execute("INSERT INTO ipam_conflict_state (ip, subnet_kind, subnet_id) VALUES (%s, %s, %s)", key)
-                send_alert(
-                    _CONFLICT_ALERT_TYPE,
-                    subnet_id=sid,
-                    ip=entry["ip"],
-                    subnet=info["name"],
-                    designated=entry["designated"] or "static",
-                    hostname=entry["hostname"],
-                    mac=entry["mac"],
-                )
-                emit(
-                    "plugin.ipam.conflict",
-                    mac=entry["mac"] or None,
-                    ip=entry["ip"],
-                    subnet_id=sid,
-                    detail=f"{entry['ip']} designated {entry['designated']} in {info['name']}, but a DHCP client holds it",
-                )
-            cur.execute("SELECT id, ip, subnet_kind, subnet_id FROM ipam_conflict_state")
-            stale = [r["id"] for r in cur.fetchall() if (r["ip"], r["subnet_kind"], r["subnet_id"]) not in seen_keys]
-            for row_id in stale:
-                cur.execute("DELETE FROM ipam_conflict_state WHERE id=%s", (row_id,))
+                new.append((sid, info, entry))
+            if unread is not None:
+                cur.execute("SELECT id, ip, subnet_kind, subnet_id FROM ipam_conflict_state")
+                stale = [
+                    r["id"]
+                    for r in cur.fetchall()
+                    if (r["ip"], r["subnet_kind"], r["subnet_id"]) not in seen_keys and r["subnet_id"] not in unread
+                ]
+                for row_id in stale:
+                    cur.execute("DELETE FROM ipam_conflict_state WHERE id=%s", (row_id,))
         db.commit()
+        committed = True
     except Exception as e:
         logger.error(f"IPAM: conflict check failed: {e}")
+        if db:
+            try:
+                db.rollback()
+            except Exception as rollback_error:
+                logger.warning(f"IPAM: could not roll back the failed conflict check: {rollback_error}")
     finally:
         if db:
             db.close()
+    if not committed:
+        return
+    for sid, info, entry in new:
+        _announce_conflict(sid, info, entry)
+
+
+def _announce_conflict(sid, info, entry):
+    """One new conflict: the alert and the Timeline event, each on its own so one failing does not stop the next."""
+    try:
+        from jen.plugin_api import send_alert
+
+        send_alert(
+            _CONFLICT_ALERT_TYPE,
+            subnet_id=sid,
+            ip=entry["ip"],
+            subnet=info["name"],
+            designated=entry["designated"] or "static",
+            hostname=entry["hostname"],
+            mac=entry["mac"],
+        )
+    except Exception as e:
+        logger.warning(f"IPAM: could not send the conflict alert for {entry['ip']}: {e}")
+    try:
+        from jen.plugin_api import emit
+
+        emit(
+            "plugin.ipam.conflict",
+            mac=entry["mac"] or None,
+            ip=entry["ip"],
+            subnet_id=sid,
+            detail=f"{entry['ip']} designated {entry['designated']} in {info['name']}, but a DHCP client holds it",
+        )
+    except Exception as e:
+        logger.warning(f"IPAM: could not record the conflict event for {entry['ip']}: {e}")
 
 
 # ── Search provider (v1.6.0, plugin API v3) ───────────────────────────────────
@@ -2117,9 +2252,10 @@ def _who_for(entry, mac, names):
 
 def investigation_card(entries, held, mac="", names=()):
     """Pure: the Investigation page's card from IPAM's own entries on the client's addresses, or None when there is
-    nothing to say. A designated (static or planned) address the client holds by lease or reservation is the conflict IPAM
-    already flags, so it is a warn card, as is an address designated for a different MAC or hostname; an address designated
-    for this client, or merely annotated (a label, an owner), is an ok card. An address with no IPAM entry says nothing."""
+    nothing to say. A designated (static or planned) address the client holds by LEASE is the conflict IPAM already flags,
+    so it is a warn card, as is an address designated for a different MAC or hostname; an address designated for this
+    client, one that is also a Kea reservation, or one merely annotated (a label, an owner), is an ok card. An address with
+    no IPAM entry says nothing."""
     parts, rows, warn = [], [], False
     for e in (entries or [])[:_INVESTIGATION_MAX_ENTRIES]:
         status = _designated_status(e)
@@ -2135,11 +2271,14 @@ def investigation_card(entries, held, mac="", names=()):
         if e.get("owner") and e.get("owner") != name:
             bits.append(f"owner {e['owner']}")
         verdict = ""
-        if designated and how in ("lease", "reservation"):
+        # v1.8.3 (IPAM-6) - only a LEASE on a designated address is the conflict IPAM flags (`_conflicts_in`, the subnet page
+        # and the periodic job all leave a reservation out: reserving in Kea an address marked static in IPAM is ordinary).
+        # The card called both a conflict, so that ordinary setup got a warning in the page's one-line answer.
+        if designated and how == "lease":
             warn = True
-            verdict = (
-                f"held by {'a DHCP lease' if how == 'lease' else 'a Kea reservation'} - IPAM flags that as a conflict"
-            )
+            verdict = "held by a DHCP lease - IPAM flags that as a conflict"
+        elif designated and how == "reservation":
+            verdict = "also a Kea reservation"
         if designated and who == "no":
             warn = True
             verdict = (verdict + "; " if verdict else "") + "designated for a different client"
@@ -2241,7 +2380,10 @@ def _api_list_entries():
     subnet, refused = _api_subnet(subnet_id)
     if refused:
         return refused
-    entries = _load_entries("kea", subnet_id)
+    try:
+        entries = _load_entries("kea", subnet_id, strict=True)
+    except _LookupFailed:
+        return jsonify({"error": "IPAM's entries could not be read"}), 503
     return jsonify(
         {
             "subnet_id": subnet_id,
@@ -2291,8 +2433,12 @@ def _api_save_entry():
     status = body.get("status", "static")
     if status not in _DESIGNATED:
         return jsonify({"error": "status must be static or planned"}), 400
-    leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"])
-    blocked = _designation_blocker(ip, status, leases_now, res_now, _load_entries("kea", subnet_id).get(ip))
+    try:
+        leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+        existing = _load_entries("kea", subnet_id, strict=True).get(ip)
+    except _LookupFailed:
+        return jsonify({"error": "Kea's leases and reservations could not be checked; nothing was changed"}), 503
+    blocked = _designation_blocker(ip, status, leases_now, res_now, existing)
     if blocked:
         return jsonify({"error": blocked}), 409
     label = str_field(body, "label", 100)
@@ -2334,8 +2480,12 @@ def _api_next_free(subnet_id):
     if network.prefixlen < _MAX_PREFIX:
         return jsonify({"error": f"subnet is larger than a /{_MAX_PREFIX}"}), 400
     ctx = _subnet_ctx("kea", subnet_id, subnet)
-    active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"])
-    ipam_entries = _load_entries("kea", subnet_id)
+    try:
+        active_leases, reservations = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+        ipam_entries = _load_entries("kea", subnet_id, strict=True)
+    except _LookupFailed:
+        # v1.8.3 (IPAM-5) - never name an address from a lookup that did not answer: it may be one a lease holds
+        return jsonify({"error": "Kea's leases and reservations could not be read; no address is offered"}), 503
     # v1.6.4 — walks the network lazily instead of materializing the whole address space for one IP.
     return jsonify({"ip": _next_free_lazy(network, active_leases, reservations, ipam_entries, ctx)})
 

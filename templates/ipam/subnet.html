@@ -3,6 +3,9 @@
 {% block title %}IPAM — {{ subnet.name }}{% endblock %}
 {% block content %}
 {% set unmanaged = (kind == 'u') %}
+{% if kea_unavailable %}
+<div class="alert alert-danger" data-ipam-note="kea-unavailable">Kea's leases and reservations could not be read just now, so this page shows IPAM's own entries only. An address shown as available may be in use, and no next free address is offered. Reload the page to try again.</div>
+{% endif %}
 
 <div class="page-header ip-1bcfaf">
     <div>
