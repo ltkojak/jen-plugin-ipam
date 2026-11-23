@@ -2656,6 +2656,59 @@ def main():
         "subnet.html: the two dialog buttons name what they act on, and nothing new is offered beside Next Free",
     )
 
+    # ── 1.8.6: the subnet page (BI12 of the executing pass on 7.2.0-beta.6; C5, C7 of the reading of its notes) ────
+    check(
+        ".ip-clip{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;"
+        "white-space:normal;word-break:break-all;min-width:0;max-width:48ch}"
+        in subnet_page
+        and ".ip-clip-row{display:flex;align-items:center;gap:6px;min-width:0}" in subnet_page
+        and ".ip-clip-row>*{flex:none}" in subnet_page
+        and ".ip-clip-row>.ip-clip{flex:0 1 auto}" in subnet_page,
+        "subnet.html (BI12): the page's own style carries the clip rule of Jen's lists, for a Jen that has none",
+    )
+    check(
+        "@media screen and (max-width:768px){.ip-clip-row{display:inline}.ip-clip{display:inline;word-break:normal}}"
+        in subnet_page
+        and not re.search(r"@media\s*\((?:max|min)-width", subnet_page),
+        "subnet.html (BI12): on a phone the card wraps a long name as before, and every width rule names screen",
+    )
+    check(
+        """{% set shown_name = entry.hostname if entry.status == 'infrastructure' else (entry.label or entry.hostname) %}"""
+        in subnet_page
+        and """<td class="ip-5e0faa" data-m="secondary">{% if shown_name %}<span class="ip-clip" title="{{ shown_name }}">{{ shown_name }}</span>{% else %}—{% endif %}</td>"""
+        in subnet_page,
+        "subnet.html (BI12): the name of a row is one clipped line with the whole name in its title, and the dash when it has none",
+    )
+    check(
+        """<div class="ip-clip-row">{{ entry.device.icon }} <span class="ip-clip" title="{{ device_name }}{% if device_maker %} ({{ device_maker }}){% endif %}">"""
+        in subnet_page
+        and subnet_page.count('class="ip-clip"') == 2
+        and 'class="clip' not in subnet_page,
+        "subnet.html (BI12): the device's name and maker are one clipped line after its icon, whole in the title",
+    )
+    check(
+        ".ip-8573ba{width:80px}" in subnet_page
+        and ".ip-1731fd{color:var(--primary);font-weight:600;white-space:nowrap}" in subnet_page
+        and "table-layout" not in subnet_page,
+        "subnet.html (BI12): no column was given a width and the table's layout rule is as it was",
+    )
+    check(
+        "document.getElementById('clear-form').submit();\n    }, 'Clear');" in subnet_page
+        and "document.getElementById('subnet-delete-form').submit();\n    }, 'Delete');" in subnet_page
+        and len(re.findall(r"jenConfirm\(", subnet_page)) == 2,
+        "subnet.html (C5): the two dialogs the page's script opens have buttons that say Clear and Delete",
+    )
+    hostname_field = re.search(r'<input type="text" name="hostname"[^>]*>', subnet_page).group(0)
+    mac_field = " ".join(re.search(r'<input type="text" name="mac"[^>]*>', subnet_page).group(0).split())
+    check(
+        'autocapitalize="off"' in hostname_field and 'spellcheck="false"' in hostname_field,
+        "subnet.html (C7): the hostname field does not capitalize or spell-check, like Jen's own host name fields",
+    )
+    check(
+        all(attr in mac_field for attr in ('autocapitalize="off"', 'autocomplete="off"', 'spellcheck="false"')),
+        "subnet.html (C7): the MAC field does not capitalize, complete or spell-check, like Jen's own MAC fields",
+    )
+
     if failures:
         print(f"\n{len(failures)} check(s) failed")
         return 1

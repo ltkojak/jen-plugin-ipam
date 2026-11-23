@@ -1,5 +1,25 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.6] - 2026-11-23
+
+Three changes to the subnet page, from the executing pass on Jen 7.2.0-beta.6 (BI12) and the reading of that release's notes against its pages (C5, C7). Only the template changed: `plugin.py`, `requires_jen` (5.68.0), `plugin_api` (3) and every migration are as they were.
+
+### Fixed: one long name pushed the address table off the page (BI12)
+
+A table gives a column the room of its widest piece of text that cannot be broken, and a hostname is one such piece. On a window 1,100 px wide a lease with a hostname of 84 characters made the address table 137 px wider than the page, and 209 px at 1,024 px: the whole page scrolled sideways and the buttons at the end of every row were off the screen. A device with a name that long, in the Device column, did the same and more (547 px at 1,100 px, and 207 px at 1,440 px). 1.8.5 gave the page the wide column, which helped a wide screen and not these.
+
+A row's name (its label, or its hostname) and its device's name are now each one line, cut with an ellipsis at the width its column has, and the whole name is in the tooltip, the way Jen's own lists of leases, reservations and devices write a name since 7.2.0-beta.6. With room a name is shown whole, up to 48 characters. The rule is in the page's own style, so it holds on an older Jen too, which has no such rule of its own. In a real browser the page now scrolls sideways by 0 px at every width tried from 1,920 px down to 390 px, with the long hostname and with the long device name. No column was given a width: the table is as wide as it was, and the room the long name no longer takes goes to the other columns. On a phone, where a row is a card, a long name wraps as before. The device's maker, which stood in brackets after its name and could wrap to a second line, is now part of that one line.
+
+### The page: the dialogs' buttons say Clear and Delete, and two fields leave what is typed alone (C5, C7)
+
+"Clear all notes and labels for this IP?" and "Delete this unmanaged subnet and ALL its IPAM entries?" each had a button that said "Confirm". They say "Clear" and "Delete", on every Jen this plugin runs on: Jen's dialog takes a label from a page's script since before 5.68.0.
+
+The Hostname and MAC Address fields of the entry dialog now tell a phone's keyboard not to capitalize or spell-check what is typed, and the MAC field not to complete it either: the attributes Jen's own host name and MAC fields carry.
+
+### The harness
+
+`tools/test_plugin.py` reads the template for the clip rule and its phone rule, for the two cells that use it with the whole name in the title, that no column was given a width, for the two labels and for the fields' attributes. The widths above were measured in Chromium against a running Jen 7.2.0-beta.6 with a real database, before and after.
+
 ## [1.8.5] - 2026-11-22
 
 One fix from the executing pass on Jen 7.2.0-beta.5 (BH9), and the changes to IPAM's two pages that came out of the look over Jen's pages on that release (V52, V54, and that report's additions 4 and 11). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.

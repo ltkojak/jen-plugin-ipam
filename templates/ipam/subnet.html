@@ -49,6 +49,17 @@
    index.html's <style> block for the convention this follows. */
 /* v1.8.5 - the one way back to the overview, above the title */
 .back-link { display: inline-block; margin-bottom: 8px; font-size: 13px; }
+/* v1.8.6 (BI12) - one long name never pushes the table off the page. A table sizes a column by its cells' widest unbreakable run, and
+   an 85-character hostname is one run: the table grew 137 px past the page at 1100 px and 209 px at 1024. A name is written in an
+   .ip-clip: it may break anywhere, so the least room it asks of its column is one character, and it shows ONE line, cut with an
+   ellipsis; its whole text is in its title. .ip-clip-row holds a clip and what stands before it (the device's icon). These are the
+   rules of Jen 7.2.0-beta.6's own .clip and .clip-row (its lists of leases, reservations and devices), written here because this
+   page also runs on a Jen that has neither. On a phone the row is a card and wraps a long name as it always did. */
+.ip-clip{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;white-space:normal;word-break:break-all;min-width:0;max-width:48ch}
+.ip-clip-row{display:flex;align-items:center;gap:6px;min-width:0}
+.ip-clip-row>*{flex:none}
+.ip-clip-row>.ip-clip{flex:0 1 auto}
+@media screen and (max-width:768px){.ip-clip-row{display:inline}.ip-clip{display:inline;word-break:normal}}
 .ip-0353c5{font-size:12px;color:#8b5cf6}
 .ip-046678{width:100%}
 .ip-05308d{font-size:24px;font-weight:700;color:var(--warning)}
@@ -291,10 +302,16 @@
             <span class="ip-ffcb32" title="Designated {{ entry.designated }} here, but a DHCP client currently holds this address">{{ icon("triangle-alert") }} Conflict ({{ entry.designated }} + lease)</span>
             {% endif %}
         </td>
-        <td class="ip-5e0faa" data-m="secondary">{% if entry.status == 'infrastructure' %}{{ entry.hostname or '—' }}{% else %}{{ entry.label or entry.hostname or '—' }}{% endif %}</td>
+        {# v1.8.6 (BI12): the name is an .ip-clip - one line, cut at the column's width, whole in its title #}
+        {% set shown_name = entry.hostname if entry.status == 'infrastructure' else (entry.label or entry.hostname) %}
+        <td class="ip-5e0faa" data-m="secondary">{% if shown_name %}<span class="ip-clip" title="{{ shown_name }}">{{ shown_name }}</span>{% else %}—{% endif %}</td>
         {% if not unmanaged %}
         <td class="ip-865c33" data-m="hide">
-            {% if entry.device %}{{ entry.device.icon }} {{ entry.device.name or entry.device.manufacturer or '—' }}{% if entry.device.name and entry.device.manufacturer %} <span class="ip-2a1f67">({{ entry.device.manufacturer }})</span>{% endif %}{% else %}—{% endif %}
+            {% if entry.device %}
+            {% set device_name = entry.device.name or entry.device.manufacturer or '—' %}
+            {% set device_maker = entry.device.manufacturer if entry.device.name and entry.device.manufacturer else '' %}
+            <div class="ip-clip-row">{{ entry.device.icon }} <span class="ip-clip" title="{{ device_name }}{% if device_maker %} ({{ device_maker }}){% endif %}">{{ device_name }}{% if device_maker %} <span class="ip-2a1f67">({{ device_maker }})</span>{% endif %}</span></div>
+            {% else %}—{% endif %}
         </td>
         {% endif %}
         <td class="mono ip-865c33" data-m="hide">{{ entry.mac or '—' }}</td>
@@ -409,13 +426,13 @@
 
         <div id="edit-hostname-group" class="form-group">
             <label>Hostname <span class="ip-749148">(optional — recorded manually; a static host has no lease to supply it)</span></label>
-            <input type="text" name="hostname" id="edit-hostname" maxlength="255" class="ip-046678" autocomplete="off">
+            <input type="text" name="hostname" id="edit-hostname" maxlength="255" class="ip-046678" autocapitalize="off" autocomplete="off" spellcheck="false">
         </div>
 
         <div id="edit-mac-group" class="form-group">
             <label>MAC Address <span class="ip-749148">(optional — Network Discovery matches on it)</span></label>
             <input type="text" name="mac" id="edit-mac" maxlength="17" class="mono ip-046678" 
-                   placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off">
+                   placeholder="aa:bb:cc:dd:ee:ff" autocapitalize="off" autocomplete="off" spellcheck="false">
         </div>
 
         <div id="edit-owner-group" class="form-group">
@@ -767,7 +784,7 @@ document.getElementById('edit-ipam-status').addEventListener('change', function(
 function clearEntry() {
     jenConfirm('Clear all notes and labels for this IP?', function() {
         document.getElementById('clear-form').submit();
-    });
+    }, 'Clear');
 }
 
 document.getElementById('edit-clear-btn').addEventListener('click', clearEntry);
@@ -791,7 +808,7 @@ document.getElementById('import-modal').addEventListener('click', function(e) { 
 function deleteSubnet() {
     jenConfirm('Delete this unmanaged subnet and ALL its IPAM entries? This cannot be undone.', function() {
         document.getElementById('subnet-delete-form').submit();
-    });
+    }, 'Delete');
 }
 document.getElementById('ipam-delete-subnet-btn').addEventListener('click', deleteSubnet);
 {% endif %}
