@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% from '_investigate.html' import investigate_link %}
 {% block title %}IPAM — {{ subnet.name }}{% endblock %}
+{% block content_class %}content--wide{% endblock %}
 {% block content %}
 {% set unmanaged = (kind == 'u') %}
+<a class="back-link" href="{{ url_for('ipam.index') }}">&larr; IPAM Lite</a>
 {% if kea_unavailable %}
 <div class="alert alert-danger" data-ipam-note="kea-unavailable">Kea's leases and reservations could not be read just now, so this page shows IPAM's own entries only. An address shown as available may be in use, and no next free address is offered. Reload the page to try again.</div>
 {% endif %}
@@ -28,24 +30,25 @@
     </div>
     <div class="ip-06307d">
         {% if next_free %}
-        <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">{{ icon("zap") }} Next free: {{ next_free }}</a>
+        <a href="{{ url_for('ipam.subnet_detail', kind=kind, subnet_id=subnet_id, ip=next_free) }}" class="btn btn-primary btn-sm" title="The first available address outside every DHCP pool">{{ icon("zap") }} Next Free: {{ next_free }}</a>
         {% endif %}
         {% if can_write %}
-        <button id="ipam-range-btn" class="btn btn-secondary btn-sm">⇔ Range…</button>
-        <button id="ipam-import-btn" class="btn btn-secondary btn-sm">{{ icon("upload") }} Import</button>
+        <button id="ipam-range-btn" class="btn btn-secondary btn-sm">⇔ Mark Range</button>
+        <button id="ipam-import-btn" class="btn btn-secondary btn-sm">{{ icon("upload") }} Import Addresses</button>
         {% endif %}
-        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">{{ icon("download") }} CSV</a>
-        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">{{ icon("download") }} Netbox CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">{{ icon("download") }} Export CSV</a>
+        <a href="{{ url_for('ipam.export_csv', kind=kind, subnet_id=subnet_id, format='netbox') }}" class="btn btn-secondary btn-sm" title="Netbox IP Addresses import format">{{ icon("download") }} Export Netbox CSV</a>
         {% if unmanaged and can_manage_unmanaged %}
         <button id="ipam-delete-subnet-btn" class="btn btn-secondary btn-sm ip-497726">{{ icon("trash") }} Delete Subnet</button>
         {% endif %}
-        <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
     </div>
 </div>
 
 <style>
 /* v1.6.0 — static declarations moved off individual elements; see
    index.html's <style> block for the convention this follows. */
+/* v1.8.5 - the one way back to the overview, above the title */
+.back-link { display: inline-block; margin-bottom: 8px; font-size: 13px; }
 .ip-0353c5{font-size:12px;color:#8b5cf6}
 .ip-046678{width:100%}
 .ip-05308d{font-size:24px;font-weight:700;color:var(--warning)}
@@ -427,10 +430,10 @@
         </div>
 
         <div class="ip-2ba4f9">
-            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="submit" class="btn btn-primary">Save Entry</button>
             <button type="button" id="edit-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button type="button" id="edit-clear-btn" class="btn btn-secondary ip-fa6c84"
->Clear all notes</button>
+>Clear All Notes</button>
         </div>
     </form>
 
@@ -466,7 +469,7 @@
             <div class="form-group"><label>Owner</label><input type="text" name="owner" maxlength="100"></div>
         </div>
         <div class="ip-a6b9b8">
-            <button type="submit" class="btn btn-primary">Apply</button>
+            <button type="submit" class="btn btn-primary">Apply to Range</button>
             <button type="button" id="range-modal-cancel-btn" class="btn btn-secondary">Cancel</button>
         </div>
     </form>

@@ -676,13 +676,23 @@ def _count_space(space):
 
 
 def _summary(kind, subnet_id, subnet):
-    """Overview card numbers without building the space."""
+    """Overview card numbers without building the space.
+
+    v1.8.5 - `entries` is how many entries of IPAM's own this subnet holds (an annotation with no designation counts), from
+    the read this function already made, or None when that read did not answer. The overview shows its first-run block
+    only when every subnet answered 0, so a table that could not be read is never taken for an empty one."""
     network = ipaddress.IPv4Network(subnet["cidr"], strict=False)
     total = max(network.num_addresses - (2 if network.prefixlen < 31 else 0), 0)
     ctx = _subnet_ctx(kind, subnet_id, subnet)
     leases, res = _load_kea_sets(subnet_id, subnet["cidr"]) if kind == "kea" else ({}, {})
-    entries = _load_entries(_KIND_DB[kind], subnet_id)
-    return _count_sets(total, lambda ip: _host_in_network(network, ip), leases, res, entries, ctx)
+    try:
+        entries = _load_entries(_KIND_DB[kind], subnet_id, strict=True)
+        held = len(entries)
+    except _LookupFailed:
+        entries, held = {}, None
+    counts = _count_sets(total, lambda ip: _host_in_network(network, ip), leases, res, entries, ctx)
+    counts["entries"] = held
+    return counts
 
 
 def _host_in_network(network, ip):
@@ -1176,14 +1186,28 @@ def index():
             logger.error(f"IPAM: summary failed for unmanaged subnet {sid}: {e}")
             summaries[("u", sid)] = {}
 
+    can_manage_unmanaged = _can_manage_unmanaged()
     return render_template(
         "ipam/index.html",
         subnet_map=subnet_map,
         ipam_subnets=ipam_subnets,
         summaries=summaries,
+        first_run=_first_run(subnet_map, ipam_subnets, summaries, can_manage_unmanaged),
         is_admin=is_admin_or_above(),
-        can_manage_unmanaged=_can_manage_unmanaged(),
+        can_manage_unmanaged=can_manage_unmanaged,
     )
+
+
+def _first_run(subnet_map, ipam_subnets, summaries, can_manage_unmanaged):
+    """Pure. v1.8.5 - whether the overview shows its Getting started block: the caller sees no unmanaged subnet, every
+    subnet on the page was read and holds no entry of IPAM's own (`entries` is 0, never None and never missing), and there
+    is a first step this caller can take (a Kea subnet to open, or the right to add an unmanaged one). It asks nothing
+    new of the database: every input is what `index` already loaded."""
+    if ipam_subnets:
+        return False
+    if any(s.get("entries") != 0 for s in summaries.values()):
+        return False
+    return bool(subnet_map) or bool(can_manage_unmanaged)
 
 
 # ── Routes: subnet detail / export ────────────────────────────────────────────
@@ -1721,9 +1745,13 @@ def save_entry(kind, subnet_id):
         flash("Invalid MAC address format.", "error")
         return redirect(detail_url)
 
-    if kind == "kea" and ipam_status in _DESIGNATED:
+    # v1.8.5 (BH9) - an unmanaged subnet has no leases and no reservations, so this block was skipped for it and a save there
+    # read nothing before it wrote: with IPAM's own table unreadable the INSERT itself was what failed, and the answer was the
+    # write's sentence where a Kea subnet in the same state gets the read's. Both kinds now read IPAM's entries first, the
+    # way `import_commit` always has, and a read that does not answer refuses before anything is written.
+    if ipam_status in _DESIGNATED:
         try:
-            leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True)
+            leases_now, res_now = _load_kea_sets(subnet_id, subnet["cidr"], strict=True) if kind == "kea" else ({}, {})
             existing = _load_entries(db_kind, subnet_id, strict=True).get(ip)
         except _LookupFailed as failed:
             flash(_refusal(failed), "error")

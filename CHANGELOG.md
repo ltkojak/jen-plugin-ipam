@@ -1,5 +1,31 @@
 # IPAM Lite Plugin — Changelog
 
+## [1.8.5] - 2026-11-22
+
+One fix from the executing pass on Jen 7.2.0-beta.5 (BH9), and the changes to IPAM's two pages that came out of the look over Jen's pages on that release (V52, V54, and that report's additions 4 and 11). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.
+
+### Fixed: a save on an unmanaged subnet names the read that failed (BH9)
+
+The 1.8.4 entry below says that when IPAM's own entries cannot be read, a save is refused with *Could not read IPAM's own entries - nothing was changed. Try again in a moment.* On a subnet Kea serves that was true. On an unmanaged subnet it was not. Such a subnet has no leases and no reservations to check an address against, so the save read nothing before it wrote; with IPAM's table unreadable the write itself was the statement that failed, and the answer was *Could not save the entry; the details are in Jen's log.* Nothing was stored in either case, but the same fault gave two different sentences, and only one of them said which table to look at.
+
+A save that marks an address Static or Planned now reads IPAM's entries first on both kinds of subnet, the way an import always has, and a read that does not answer refuses the save with the 1.8.4 sentence before anything is written. Kea is still not asked about an unmanaged subnet. A write that fails after the read answered keeps *Could not save the entry; the details are in Jen's log.* A save that only adds a note, with the status left at Available, decides nothing from the entries and reads none, on either kind of subnet, so there a failure is still the write's.
+
+### Added: the overview says what to do first (the look-over's addition 11)
+
+A person who had just installed IPAM Lite opened a page of subnet cards under the line *IP address space across all subnets.*, with nothing that said the cards open, what to do on one, or that IPAM would alert on anything. While IPAM holds no entry and no unmanaged subnet, the overview now opens with a **Getting started** card of three steps: open a subnet Jen already knows from Kea and mark an address Static or Planned there, or add an unmanaged subnet (the card carries the page's own **Add Unmanaged Subnet** button for an account that may use it); what IPAM then shows by itself, which is every address of the subnet with Kea's leases and reservations beside the entries you add; and where the conflict alert is set, with a link to Settings - Alerts for an admin.
+
+The card goes away with the first entry or the first unmanaged subnet. It is decided from what the page had already read, so no new query runs. If the entries of any subnet on the page could not be read, the card is not shown: a table that did not answer is not taken for an empty one. With no subnet at all, the card takes the place of *No subnets available.* for an account that may add an unmanaged subnet; everyone else still gets that sentence.
+
+### Changed: one way back from a subnet's page, and room for its table (addition 4, V54)
+
+The subnet page had an **← All Subnets** button at the end of its row of buttons, where on a phone it took a line of its own. The page now has one link back, **← IPAM Lite**, as its first element above the title, and the button is gone. The page also tells Jen that it is a table page: Jen 7.2.0-beta.6 lets such a page grow to 1,800 px on a wide monitor, and an older Jen ignores the request.
+
+### Changed: button labels and the gap between subnet cards (V52)
+
+Every button on the subnet page now reads in Title Case and names what it acts on: **Next Free: 10.0.0.5**, **Mark Range** (was *Range…*), **Import Addresses** (was *Import*), **Export CSV** and **Export Netbox CSV** (were *CSV* and *Netbox CSV*), **Save Entry** (was *Save*), **Clear All Notes** and **Apply to Range** (was *Apply*). What each does is unchanged, and the notices on the page still call the feature Next free.
+
+On the overview the rows of subnet cards were 32 px apart and the columns 16 px, because each card brought Jen's own 16 px bottom margin on top of the grid's gap. The gap is now 16 px both ways, as on Jen's own pages.
+
 ## [1.8.4] - 2026-11-21
 
 Three fixes from the executing pass on Jen 7.2.0-beta.4 (BG1, BG6, BG7), and one sentence of the 1.8.3 entry put right (BG9). `requires_jen` (5.68.0), `plugin_api` (3) and every migration are unchanged.

@@ -1475,7 +1475,7 @@ def main():
             'id="ipam-search"' in viewer_page
             and 'data-filter="static"' in viewer_page
             and "/client?q=aa%3Abb%3Acc%3Add%3Aee%3A05" in viewer_page
-            and "Next free: 10.9.0.6" in viewer_page,
+            and "Next Free: 10.9.0.6" in viewer_page,
             "subnet.html as a viewer: the search, the filters, Investigate and Next free are all still there",
         )
         check(
@@ -1486,7 +1486,7 @@ def main():
             "subnet.html as a viewer: no script reaches for a control that is not on the page",
         )
         check(
-            "[icon] CSV</a>" in viewer_page and "[icon] Netbox CSV</a>" in viewer_page,
+            "[icon] Export CSV</a>" in viewer_page and "[icon] Export Netbox CSV</a>" in viewer_page,
             "subnet.html as a viewer: the CSV export links are reads and stay",
         )
         # unmanaged: Delete Subnet follows _can_manage_unmanaged, not the role alone
@@ -1523,6 +1523,58 @@ def main():
             "ipam-add-subnet-btn" in render_index(True) and "add-subnet-modal" in render_index(True),
             "index.html as an unrestricted admin: Add Unmanaged Subnet and its modal are present",
         )
+
+        # 1.8.5: the Getting started card of the overview
+        def render_overview(first_run, subnets, can_manage, is_admin=True):
+            return env.get_template("ipam/index.html").render(
+                subnet_map=subnets,
+                ipam_subnets={},
+                summaries={("kea", sid): {"total": 254, "pct": 0, "available": 254} for sid in subnets},
+                first_run=first_run,
+                is_admin=is_admin,
+                can_manage_unmanaged=can_manage,
+                ipv6_enabled=False,
+            )
+
+        one_subnet = {5: {"name": "lan", "cidr": "10.5.0.0/24"}}
+        fresh = render_overview(True, one_subnet, True)
+        check(
+            '<div class="card first-run">' in fresh
+            and "<h3>Getting started</h3>" in fresh
+            and fresh.count("<li>") == 3
+            and fresh.index('<div class="card first-run">') < fresh.index('class="ip-cd5a1e"'),
+            "index.html on a fresh install: the Getting started card, three steps, above the subnet cards",
+        )
+        check(
+            fresh.count("ipam-add-subnet-open") == 3 and '<a href="/settings/alerts">Settings - Alerts</a>' in fresh,
+            "index.html: step 1 carries the page's own Add Unmanaged Subnet button and step 3 links Settings - Alerts",
+        )
+        used = render_overview(False, one_subnet, True)
+        check(
+            "first-run" not in used and "Getting started" not in used and "lan" in used,
+            "index.html once IPAM holds something: no Getting started card and no rule for one, the subnet cards as before",
+        )
+        viewer_fresh = render_overview(True, one_subnet, False, is_admin=False)
+        check(
+            "ipam-add-subnet-open" not in viewer_fresh
+            and 'href="/settings/alerts"' not in viewer_fresh
+            and "Settings - Alerts" in viewer_fresh
+            and "Open a subnet below." in viewer_fresh,
+            "index.html as a viewer on a fresh install: the steps without the button and without a link a viewer is refused",
+        )
+        nothing = render_overview(True, {}, True)
+        check(
+            '<div class="card first-run">' in nothing
+            and "No subnets available." not in nothing
+            and 'class="ip-cd5a1e"' not in nothing
+            and "Add an unmanaged subnet: a network Kea does not serve, tracked in IPAM only." in nothing,
+            "index.html with no subnet at all: the card stands in place of the empty grid, and step 1 is the unmanaged subnet",
+        )
+        check(
+            "No subnets available." in render_overview(False, {}, False, is_admin=False),
+            "index.html with no subnet and no first step to offer: the plain sentence, as before",
+        )
+
         check(
             "import_commit" in (tpl_dir / "import_preview.html").read_text(encoding="utf-8"),
             "import_preview.html: only ever rendered by import_preview, a route that refuses a viewer first (no gate needed)",
@@ -2370,6 +2422,238 @@ def main():
         and re.match(r"<div class=\"[^\"]+\"", kea_notice.group(1)).group(0)
         == re.match(r"<div class=\"[^\"]+\"", notice.group(1)).group(0),
         "subnet.html: the new notice is built like the one for Kea",
+    )
+
+    # ── 1.8.5 (BH9): a save on an unmanaged subnet reads IPAM's entries before it writes ──────────────────────────────
+    class _EntriesGone(FakeDB):
+        """Jen's database with ipam_static_entries gone, which is what an unreadable table is: every statement that names
+        it fails, a read and a write alike. Anything else is recorded."""
+
+        def execute(self, sql, params=()):
+            if "ipam_static_entries" in sql:
+                raise RuntimeError(1146, "Table 'jen.ipam_static_entries' doesn't exist")
+            super().execute(sql, params)
+
+    class _WriteFails(FakeDB):
+        """The read of ipam_static_entries answers (no rows) and a write to it fails."""
+
+        def execute(self, sql, params=()):
+            if "ipam_static_entries" in sql and sql.split()[0].upper() != "SELECT":
+                raise RuntimeError(1205, "Lock wait timeout exceeded")
+            super().execute(sql, params)
+
+        def fetchall(self):
+            return []
+
+    class _Answers(FakeDB):
+        def fetchall(self):
+            return []
+
+    h = load_plugin()
+    _stub_jen_plugin_api()
+    h_said = []
+    h.flash = lambda msg, cat="message": h_said.append(msg)
+    h.redirect = lambda *a, **k: "back"
+    h.url_for = lambda *a, **k: "/x"
+    h._audit = lambda *a, **k: None
+    h.current_user.role = "admin"
+    h._check_access = lambda kind, sid, notify=True: {"name": "backend", "cidr": "10.5.0.0/24", "gateway": ""}
+    kea_asked = []
+
+    def _kea_sets_recorded(sid, cidr=None, strict=False):
+        kea_asked.append(sid)
+        return {}, {}
+
+    h._load_kea_sets = _kea_sets_recorded
+    static_form = {"ip": "10.5.0.30", "label": "x", "ipam_status": "static"}
+    write_sentence = "Could not save the entry; the details are in Jen's log."
+
+    gone = _EntriesGone()
+    h._jen_db = lambda: gone
+    h.request = types.SimpleNamespace(form=static_form, args={})
+    h.save_entry("u", 7)
+    check(
+        h_said == [h.ENTRIES_REFUSAL] and not _wrote(gone),
+        f"save_entry on an unmanaged subnet: with IPAM's own table unreadable the refusal names that read and nothing is written (BH9) (got {h_said})",
+    )
+    check(
+        kea_asked == [], f"and Kea, which has nothing to say about an unmanaged subnet, is not asked (got {kea_asked})"
+    )
+    h_said.clear()
+    h.save_entry("kea", 5)
+    check(
+        h_said == [h.ENTRIES_REFUSAL] and not _wrote(gone) and kea_asked == [5],
+        f"save_entry on a Kea subnet in the same state: the same sentence, as in 1.8.4 (got {h_said})",
+    )
+    stuck = _WriteFails()
+    h._jen_db = lambda: stuck
+    h_said.clear()
+    h.save_entry("u", 7)
+    check(
+        h_said == [write_sentence] and [st[0] for st in stuck.statements] == ["SELECT"],
+        f"save_entry on an unmanaged subnet: a WRITE that fails after the read answered keeps the write's sentence (got {h_said})",
+    )
+    fine = _Answers()
+    h._jen_db = lambda: fine
+    h_said.clear()
+    h.save_entry("u", 7)
+    check(
+        h_said == ["Entry saved for 10.5.0.30."]
+        and [st[0] for st in fine.statements] == ["SELECT", "INSERT", "INSERT"],
+        f"save_entry on an unmanaged subnet with everything answering: read, then the entry and its history row (got {h_said}, {[st[0] for st in fine.statements]})",
+    )
+    gone = _EntriesGone()
+    h._jen_db = lambda: gone
+    h_said.clear()
+    h.request = types.SimpleNamespace(form={"ip": "10.5.0.30", "label": "x", "ipam_status": "available"}, args={})
+    h.save_entry("u", 7)
+    check(
+        h_said == [write_sentence] and not _wrote(gone),
+        f"save_entry: a note that designates nothing decides nothing from the entries and reads none, as before (got {h_said})",
+    )
+
+    # ── 1.8.5: the overview's Getting started card ──────────────────────────────────────────────────────────────────────
+    class _Entries(FakeDB):
+        """Jen's database for the overview: ipam_static_entries answers with `rows`, or fails when `rows` is None."""
+
+        def __init__(self, rows):
+            super().__init__()
+            self.rows = rows
+
+        def execute(self, sql, params=()):
+            if self.rows is None and "ipam_static_entries" in sql:
+                raise RuntimeError(1146, "Table 'jen.ipam_static_entries' doesn't exist")
+            super().execute(sql, params)
+
+        def fetchall(self):
+            return list(self.rows)
+
+    note = {"ip": "10.5.0.9", "label": "spare", "owner": "", "notes": "", "hostname": "", "mac": "", "is_static": 0}
+    note["entry_status"] = "available"
+    lan = {5: {"name": "lan", "cidr": "10.5.0.0/24"}}
+    h._load_kea_sets = lambda sid, cidr=None, strict=False: ({}, {})
+    h._subnet_ctx = lambda kind, sid, subnet: {"pools": [], "infrastructure": {}, "gateways": [], "dns": []}
+    h.render_template = lambda name, **kw: kw
+    gate_user_h = sys.modules["flask_login"].current_user
+
+    def overview(rows, subnets=lan, unmanaged=None, role="admin", all_subnets=True):
+        store = _Entries(rows)
+        h._jen_db = lambda: store
+        h._accessible_subnets = lambda: dict(subnets)
+        h._get_ipam_subnets = lambda: dict(unmanaged or {})
+        gate_user_h.role, h.current_user.role, h.current_user.all_subnets = role, role, all_subnets
+        return h.index()
+
+    page = overview([])
+    check(
+        page.get("first_run") is True and page["summaries"][("kea", 5)]["entries"] == 0,
+        f"index: with no entry and no unmanaged subnet the overview is a first run (got {page.get('first_run')})",
+    )
+    page = overview([note])
+    check(
+        page.get("first_run") is False and page["summaries"][("kea", 5)]["entries"] == 1,
+        "index: one entry, even a note that designates nothing, and it is not a first run",
+    )
+    page = overview(None)
+    check(
+        page.get("first_run") is False
+        and page["summaries"][("kea", 5)]["entries"] is None
+        and page["summaries"][("kea", 5)]["total"] == 254,
+        f"index: entries that could not be read are not 'no entries': no first-run card, and the card's counts still come (got {page.get('first_run')})",
+    )
+    page = overview([], unmanaged={3: {"name": "backend", "cidr": "172.16.0.0/24", "description": "", "gateway": ""}})
+    check(page.get("first_run") is False, "index: an unmanaged subnet exists, so it is not a first run")
+    check(
+        overview([], subnets={}).get("first_run") is True,
+        "index: no subnet at all and the caller may add an unmanaged one: the first run's step is that",
+    )
+    check(
+        overview([], subnets={}, role="viewer").get("first_run") is False
+        and overview([], subnets={}, role="admin", all_subnets=False).get("first_run") is False,
+        "index: no subnet at all and nothing this caller may add: no first-run card",
+    )
+    check(
+        overview([], role="viewer").get("first_run") is True,
+        "index: a viewer with a subnet to open and nothing stored still gets the steps",
+    )
+    real_summary = h._summary
+
+    def _summary_breaks(kind, sid, info):
+        raise RuntimeError("summary failed")
+
+    h._summary = _summary_breaks
+    check(
+        overview([]).get("first_run") is False, "index: a subnet whose summary failed is not read, so no first-run card"
+    )
+    h._summary = real_summary
+    gate_user_h.role, h.current_user.role, h.current_user.all_subnets = "admin", "admin", True
+
+    # ── 1.8.5: the pages (the look-over's rows on plugin pages) ─────────────────────────────────────────────────────────
+    overview_page = pathlib.Path(ROOT, "templates", "ipam", "index.html").read_text(encoding="utf-8")
+    subnet_page = pathlib.Path(ROOT, "templates", "ipam", "subnet.html").read_text(encoding="utf-8")
+    check(
+        "{% if first_run %}" in overview_page
+        and '<div class="card first-run">\n    <h3>Getting started</h3>\n    <ol>' in overview_page
+        and overview_page.count("<li>") == 3,
+        "index.html: one first-run card, headed Getting started, with three steps",
+    )
+    check(
+        "IPAM then lists every address of the subnet: on a Kea subnet the leases and reservations it reads from Kea "
+        "beside the entries you add, on an unmanaged subnet your entries alone."
+        in overview_page
+        and "Every 15 minutes IPAM checks whether a DHCP client holds an address you marked Static or Planned, and "
+        "announces a new conflict once."
+        in overview_page
+        and '<a href="/settings/alerts">Settings - Alerts</a>' in overview_page,
+        "index.html: step 2 says what IPAM shows by itself and step 3 where the conflict alert is set",
+    )
+    plugin_text = pathlib.Path(ROOT, "plugin.py").read_text(encoding="utf-8")
+    check(
+        'register_periodic("ipam", "conflict_check", _check_conflicts, every_minutes=15)' in plugin_text
+        and 'label="IPAM Conflict"' in plugin_text,
+        "and the 15 minutes and the alert's name in step 3 are the ones register() gives",
+    )
+    check(
+        ".ip-cd5a1e .card{margin-bottom:0}" in overview_page
+        and ".ip-cd5a1e{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-bottom:16px}"
+        in overview_page,
+        "index.html: the subnet cards are 16px apart both ways (a card's own bottom margin no longer doubles the row gap)",
+    )
+    check(
+        "document.querySelectorAll('.ipam-add-subnet-open')" in overview_page
+        and overview_page.count("ipam-add-subnet-open") == 3,
+        "index.html: the header's button and the first-run card's button open the one form",
+    )
+    content_start = subnet_page.index("{% block content %}")
+    first_element = subnet_page[content_start:].split("\n")[2]
+    check(
+        first_element == """<a class="back-link" href="{{ url_for('ipam.index') }}">&larr; IPAM Lite</a>"""
+        and subnet_page.count("url_for('ipam.index')") == 1
+        and "All Subnets" not in subnet_page,
+        f"subnet.html: one way back, the first element of the page, named after the overview (got {first_element!r})",
+    )
+    check(
+        ".back-link { display: inline-block; margin-bottom: 8px; font-size: 13px; }" in subnet_page,
+        "subnet.html: the back link's style is the one every plugin's detail page uses",
+    )
+    check(
+        "{% block content_class %}content--wide{% endblock %}" in subnet_page and "content_class" not in overview_page,
+        "subnet.html: the address table may use a wide page; the overview keeps the usual width",
+    )
+    labels = re.findall(r"<button\b[^>]*>(.*?)</button>", subnet_page, re.S) + re.findall(
+        r'<a\b[^>]*class="btn[^>]*>(.*?)</a>', subnet_page, re.S
+    )
+    labels = [re.sub(r"\{\{.*?\}\}|\{%.*?%\}", "", label).strip() for label in labels]
+    words = [w for label in labels for w in re.findall(r"[A-Za-z]+", label)]
+    check(
+        all(w[0].isupper() or w in ("to", "a", "the", "of") for w in words) and len(labels) >= 20,
+        f"subnet.html: every button's label is Title Case (got {[w for w in words if not w[0].isupper()]})",
+    )
+    for label in ("Next Free:", "⇔ Mark Range", "Import Addresses", "Export CSV", "Export Netbox CSV", "Save Entry"):
+        check(label in labels, f"subnet.html: a button reads {label!r}")
+    check(
+        "Clear All Notes" in subnet_page and "Apply to Range" in subnet_page and "Use next free" not in subnet_page,
+        "subnet.html: the two dialog buttons name what they act on, and nothing new is offered beside Next Free",
     )
 
     if failures:

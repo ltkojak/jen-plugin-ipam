@@ -8,7 +8,7 @@
         <p>IP address space across all subnets.</p>
     </div>
     {% if can_manage_unmanaged %}
-    <button id="ipam-add-subnet-btn" class="btn btn-primary">＋ Add Unmanaged Subnet</button>
+    <button id="ipam-add-subnet-btn" class="btn btn-primary ipam-add-subnet-open">＋ Add Unmanaged Subnet</button>
     {% endif %}
 </div>
 
@@ -47,7 +47,18 @@
 .ip-b8cf4b{font-size:10px;font-weight:600;color:var(--warning);border:1px solid var(--warning);border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em}
 .ip-c4d0b1{background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1}
 .ip-cc366e{display:flex;gap:16px;font-size:11px;flex-wrap:wrap}
-.ip-cd5a1e{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+.ip-cd5a1e{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-bottom:16px}
+/* v1.8.5 - a card brings a 16px bottom margin of its own (Jen's .card), which on top of the grid's row gap made the rows
+   32px apart and the columns 16px. The grid's gap is the one gap; the grid keeps the 16px to the card below it. */
+.ip-cd5a1e .card{margin-bottom:0}
+{% if first_run %}
+/* v1.8.5 - the first-run card, shown while IPAM holds nothing of its own */
+.first-run h3{font-size:15px;margin-bottom:12px}
+.first-run ol{padding-left:22px}
+.first-run li{margin-bottom:10px;line-height:1.6}
+.first-run li:last-child{margin-bottom:0}
+.first-run .btn{margin-left:8px}
+{% endif %}
 .ip-dc2e42{color:var(--primary)}
 .ip-f045bb{color:var(--text)}
 .ip-fc84e9{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
@@ -126,6 +137,22 @@
 </a>
 {% endmacro %}
 
+{% if first_run %}
+{# v1.8.5 - IPAM holds no entry and no unmanaged subnet yet: the first steps. With no subnet at all this card stands in
+   place of the empty grid. #}
+<div class="card first-run">
+    <h3>Getting started</h3>
+    <ol>
+        <li>{% if subnet_map %}Open a subnet below. Jen already knows these from Kea, and on a subnet's page an admin marks an address Static or Planned and gives it a label, an owner and notes.{% endif %}
+            {% if can_manage_unmanaged %}{% if subnet_map %}For a network Kea does not serve, add an unmanaged subnet.{% else %}Add an unmanaged subnet: a network Kea does not serve, tracked in IPAM only.{% endif %}
+            <button type="button" class="btn btn-sm btn-primary ipam-add-subnet-open">＋ Add Unmanaged Subnet</button>{% endif %}</li>
+        <li>IPAM then lists every address of the subnet: on a Kea subnet the leases and reservations it reads from Kea beside the entries you add, on an unmanaged subnet your entries alone.</li>
+        <li>Every 15 minutes IPAM checks whether a DHCP client holds an address you marked Static or Planned, and announces a new conflict once. Where its "IPAM Conflict" alert goes is set under {% if is_admin %}<a href="/settings/alerts">Settings - Alerts</a>{% else %}Settings - Alerts{% endif %}.</li>
+    </ol>
+</div>
+{% endif %}
+
+{% if subnet_map or ipam_subnets %}
 <div class="ip-cd5a1e">
 {% for subnet_id, info in subnet_map.items() %}
 {{ subnet_card('kea', subnet_id, info, summaries.get(('kea', subnet_id), {})) }}
@@ -134,8 +161,7 @@
 {{ subnet_card('u', subnet_id, info, summaries.get(('u', subnet_id), {}), unmanaged=True) }}
 {% endfor %}
 </div>
-
-{% if not subnet_map and not ipam_subnets %}
+{% elif not first_run %}
 <div class="card ip-90505a">
     No subnets available.
 </div>
@@ -203,7 +229,10 @@ function openAddSubnetModal() {
 function closeAddSubnetModal() {
     document.getElementById('add-subnet-modal').style.display = 'none';
 }
-document.getElementById('ipam-add-subnet-btn').addEventListener('click', openAddSubnetModal);
+// v1.8.5 - every button that opens the form: the header's, and step 1's while the page is new
+document.querySelectorAll('.ipam-add-subnet-open').forEach(function(btn) {
+    btn.addEventListener('click', openAddSubnetModal);
+});
 document.getElementById('ipam-add-subnet-close-btn').addEventListener('click', closeAddSubnetModal);
 document.getElementById('ipam-add-subnet-cancel-btn').addEventListener('click', closeAddSubnetModal);
 document.getElementById('add-subnet-modal').addEventListener('click', function(e) {
